@@ -3,24 +3,115 @@ using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Xml.Serialization;
+using System.Linq;
 
 namespace NetworkManager
 {
   public static class Network
   {
-    public static void Initialize(Node[] EntryPoints, string NetworkName = "testnet")
+    public static void Initialize(Node[] EntryPoints, string NetworkName = "testnet", string MyAddress = null)
     {
       Setup.Network.NetworkName = NetworkName;
       NodeList = EntryPoints;
       var Nodes = GetNetworkNodes();
       if (Nodes != null)
-        NodeList = Nodes;
+      {
+        var List = new List<Node>(Nodes);
+        if (MyAddress != null)
+        {
+          MyNode = new Node { MachineName = Setup.Network.MachineName, Server = MyAddress };
+          List.Add(MyNode);
+        }
+        NodeList = List.OrderBy(o => o.Server).ToArray();
+      }
     }
     //private static string _NetworkName = "testnet";
     public static string NetworkName { get { return Setup.Network.NetworkName; } }
     private static bool _IsOnline;
     public static bool IsOnline { get { return _IsOnline; } }
-    public static Node[] NodeList;
+    private static Node[] NodeList;
+    private static Node MyNode;
+    static class MappingNetwork
+    {
+      static List<List<Node>> NetworkGroups = new List<List<Node>>();//All groups of the network
+      static List<List<Node>> MyGroups = new List<List<Node>>();//Only my groups
+      static List<NextNode> NextNodes = new List<NextNode>();//Communication nodes
+      private static void SetNodeGroups(Node[] NodeList)
+      {
+        var Nodes = new List<Node>(NodeList);
+        lock (NodeList)
+        {
+          List<List<Node>> Groups = null;
+          do
+          {
+            if (Nodes == null)
+              Nodes = HorizontalNodes(Groups);
+            Groups = Regroup(Nodes);
+            NetworkGroups.AddRange(Groups);
+            Nodes = null;
+          } while (Groups.Count > 1);
+        }
+        foreach (var item in NetworkGroups)
+          if (item.Contains(MyNode))
+          {
+            MyGroups.Add(item);
+            if (item.Count > 1)
+            {
+              var NextNode = new NextNode();
+              NextNodes.Add(NextNode);
+              NextNode.GroupId = NetworkGroups.IndexOf(item);
+              if (item.Last() == MyNode)
+                NextNode.Node = item.First();
+              else
+                NextNode.Node = item[item.IndexOf(MyNode) + 1];
+            }
+          }
+      }
+      class NextNode
+      {
+        public int GroupId;
+        public Node Node;
+      }
+
+      //private static List<List<Node>> MappingGroup()
+      //{
+      //  var Groups = new List<List<Node>>();
+      //  var Group = new List<Node>();
+      //  foreach (var Node in NodeList)
+      //  {
+      //    if (Group.Count == 0)
+      //      Groups.Add(Group);
+      //    Group.Add(Node);
+      //    if (Group.Count == 20)
+      //      Group = new List<Node>();
+      //  }
+      //  return Groups;
+      //}
+
+      private static List<Node> HorizontalNodes(List<List<Node>> NodeGroups)
+      {
+        var NodeList = new List<Node>();
+        foreach (var item in NodeGroups)
+          NodeList.Add(item[0]);
+        return NodeList;
+      }
+
+      private static List<List<Node>> Regroup(List<Node> Nodes)
+      {
+        var Groups = new List<List<Node>>();
+        var Group = new List<Node>();
+        foreach (var Node in Nodes)
+        {
+          if (Group.Count == 0)
+            Groups.Add(Group);
+          Group.Add(Node);
+          if (Group.Count == 20)
+            Group = new List<Node>();
+        }
+        return Groups;
+      }
+    }
+
     public static bool ReceivesHttpRequest(Dictionary<string, string> QueryString, Dictionary<string, string> Form, out string ContentType, System.IO.Stream OutputStream)
     {
       //Setting = CurrentSetting();
@@ -83,7 +174,7 @@ namespace NetworkManager
                   {
                     if (PostActions.ContainsKey(Post))
                     {
-                      ReturnObject= PostActions[Post](XmlObject);
+                      ReturnObject = PostActions[Post](XmlObject);
                     }
                   }
                 }
@@ -441,7 +532,7 @@ namespace NetworkManager
       public string PublicKey;
     }
     public enum Request { NetworkNodes }
-    public static Node[] GetNetworkNodes()
+    private static string SendRequest(Request Request)
     {
       int Try = 0;
       string XmlResult;
@@ -450,22 +541,23 @@ namespace NetworkManager
         Try += 1;
         var Node = GetRandomNode();
         //XmlResult = SendObjectSync(null, Node.Server, null, Node.MachineName + ".");
-        XmlResult = GetObjectSync(Node.Server, "NetworkNodes", Node.MachineName + ".");
+        XmlResult = GetObjectSync(Node.Server, Request.NetworkNodes.ToString(), Node.MachineName + ".");
       } while (string.IsNullOrEmpty(XmlResult) && Try <= 10);
-      Node[] Nodes = null;
       if (Try > 10)
         _IsOnline = false;
       else
         _IsOnline = true;
-      if (!string.IsNullOrEmpty(XmlResult))
-      {
-        object ReturmObj;
-        Converter.XmlToObject(XmlResult, typeof(Node[]), out ReturmObj);
-        Nodes = (Node[])ReturmObj;
-      }
-      return Nodes;
+      return XmlResult;
     }
-    public static Node GetRandomNode()
+    private static Node[] GetNetworkNodes()
+    {
+      var XmlResult = SendRequest(Request.NetworkNodes);
+      if (string.IsNullOrEmpty(XmlResult))
+        return null;
+      Converter.XmlToObject(XmlResult, typeof(Node[]), out object ReturmObj);
+      return (Node[])ReturmObj;
+    }
+    private static Node GetRandomNode()
     {
       lock (NodeList)
       {
@@ -473,6 +565,24 @@ namespace NetworkManager
           return NodeList[new Random().Next(NodeList.Length)];
       }
       return null;
+    }
+    public enum Message { ImOnline, ImOfflone }
+    private static string SendMessage(Message Message)
+    {
+      int Try = 0;
+      string XmlResult;
+      do
+      {
+        Try += 1;
+        var Node = GetRandomNode();
+        //XmlResult = SendObjectSync(null, Node.Server, null, Node.MachineName + ".");
+        XmlResult = SendObjectSync(Message, Node.Server, null, Node.MachineName + ".");
+      } while (string.IsNullOrEmpty(XmlResult) && Try <= 10);
+      if (Try > 10)
+        _IsOnline = false;
+      else
+        _IsOnline = true;
+      return XmlResult;
     }
 
   }
