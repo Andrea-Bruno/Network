@@ -31,16 +31,18 @@ namespace NetworkManager
     {
       return System.Text.Encoding.GetEncoding("utf-16LE").GetString(Bytes);// Unicode encodin
     }
-    public static void XmlToObject(string Xml, Type Type, out object Obj)
+    public static bool XmlToObject(string Xml, Type Type, out object Obj)
     {
       System.Xml.Serialization.XmlSerializer XmlSerializer = new System.Xml.Serialization.XmlSerializer(Type);
       try
       {
         Obj = XmlSerializer.Deserialize(new System.IO.StringReader(Xml));
+        return true;
       }
       catch (Exception ex)
       {
         Obj = null;
+        return false;
       }
     }
   }
