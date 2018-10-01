@@ -9,7 +9,6 @@ namespace NetworkManager
 {
   public static class Network
   {
-
     /// <summary>
     /// This method initializes the network.
     /// You can join the network as a node, and contribute to decentralization, or hook yourself to the network as an external user.
@@ -24,38 +23,35 @@ namespace NetworkManager
       Setup.Network.NetworkName = NetworkName;
       if (EntryPoints != null)
         Setup.Network.EntryPoints = EntryPoints;
-      if (Setup.Network.EntryPoints != null)
-      {
-        var EntryPointsList = Setup.Network.EntryPoints.ToList();
-        EntryPointsList.RemoveAll(x => x.Address == Setup.Network.MyAddress);
-        NodeList = EntryPointsList.ToArray();
-      }
-      var Nodes = Protocol.GetNetworkNodes();
-      List<Node> List;
-      if (Nodes != null)
-        List = new List<Node>(Nodes);
-      else
-        List = new List<Node>();
-      if (!String.IsNullOrEmpty(Setup.Network.MyAddress))
-      {
-        MyNode = new Node { MachineName = Setup.Network.MachineName, Address = Setup.Network.MyAddress };
-        var Answare = Protocol.ImOnline();
-        List.RemoveAll(x => x.Address == MyNode.Address);
-        List.Add(MyNode);
-      }
-      NodeList = List.OrderBy(o => o.Address).ToArray();
+      OnlineDetection.WaitForInternetConnection();
     }
     //private static string _NetworkName = "testnet";
     public static string NetworkName { get { return Setup.Network.NetworkName; } }
     private static bool _IsOnline;
     public static bool IsOnline { get { return _IsOnline; } }
+    private static DateTime Now()
+    {
+      return DateTime.UtcNow;
+    }
     public class Node
     {
       public string Address;
       public string MachineName;
       public string PublicKey;
+      public string IP;
+      public void DetectIP()
+      {
+        try
+        {
+          var ips = System.Net.Dns.GetHostAddresses(new Uri(Address).Host);
+          IP = ips.Last().ToString();
+        }
+        catch (Exception)
+        {
+        }
+      }
     }
-    private static Node[] NodeList;
+    private static List<Node> NodeList;
     private static Node GetRandomNode()
     {
       lock (NodeList)
@@ -63,12 +59,12 @@ namespace NetworkManager
         int min = 1;
         if (MyNode != null)
           min = 2;
-        if (NodeList.Length >= min)
+        if (NodeList.Count >= min)
         {
           Node RandomNode;
           do
           {
-            RandomNode = NodeList[new Random().Next(NodeList.Length)];
+            RandomNode = NodeList[new Random().Next(NodeList.Count)];
           } while (RandomNode == MyNode);
           return RandomNode;
         }
@@ -76,83 +72,187 @@ namespace NetworkManager
       return null;
     }
     private static Node MyNode;
-    public static void NodeExecute(Execute Execute)
+
+    /// <summary>
+    /// Performs a specific code addressed to a randomly selected node.
+    /// </summary>
+    /// <param name="Execute">The instructions to be executed</param>
+    public static bool InteractWithRandomNode(Execute Execute)
     {
-      var Node = GetRandomNode();
-      int Count = 0;
       bool Ok;
+      int TryNode = 0;
       do
       {
-        Count++;
-        Ok = Execute.Invoke(Node);
-      } while (Ok == false && Count < 3);
+        var Node = GetRandomNode();
+        int Count = 0;
+        do
+        {
+          Count++;
+          Ok = Execute.Invoke(Node);
+        } while (Ok == false && Count < 2);
+      } while (Ok == false && TryNode < 3);
+      return Ok;
     }
     public delegate bool Execute(Node Node);
-    static class MappingNetwork
+    /// <summary>
+    /// The spooler contains the logic that allows synchronization of data on the peer2peer network
+    /// </summary>
+    private static class Spooler
     {
+      //static private Dictionary<string, List<BufferManager.Element>> DataSendedMemory = new Dictionary<string, List<BufferManager.Element>>();
+      static internal void AddDatas(List<BufferManager.Element> Datas)
+      {
+        BufferManager.AddLocal(Datas);
+      }
+      private static Dictionary<System.Threading.Thread, string> ThreadsIP = new Dictionary<System.Threading.Thread, string>();
+      //private static List<System.Threading.Thread> ThreadList = new List<System.Threading.Thread>();
+      internal static bool ThreadBlock(System.Threading.Thread Thread, string NodeIp)
+      {
+        if (NodeList.Find((x) => x.IP == NodeIp) != null)
+        {
+          Thread.Suspend();
+          lock (ThreadsIP)
+            ThreadsIP.Add(Thread, NodeIp);
+          return true;
+        }
+        else
+          return false;
+      }
+      static private Dictionary<System.Threading.Thread, List<BufferManager.Element>> DataToSend = new Dictionary<System.Threading.Thread, List<BufferManager.Element>>();
+      static internal List<BufferManager.Element> GetElements()
+      {
+        var Elements = DataToSend[System.Threading.Thread.CurrentThread];
+        lock (DataToSend)
+          DataToSend.Remove(System.Threading.Thread.CurrentThread);
+        return Elements;
+      }
+      internal static int Sec = MappingNetwork.GroupSize / 4;
+      static private System.Threading.Timer Process = new System.Threading.Timer(TimerEvent, null, Sec, Sec);
+      static private void TimerEvent(object x)
+      {
+        var ToRemove = new List<System.Threading.Thread>();
+        lock (ThreadsIP)
+        {
+          foreach (var Corrispondence in ThreadsIP)
+          {
+            var IP = Corrispondence.Value;
+            //if (DataSendedMemory.TryGetValue(IP, out List<BufferManager.Element> Sended) == false)
+            //{
+            //  Sended = new List<BufferManager.Element>();
+            //  DataSendedMemory.Add(IP, Sended);
+            //}
+            var ReadyToSend = new List<BufferManager.Element>();
+            lock (BufferManager.Buffer)
+              foreach (var Data in BufferManager.Buffer)
+              {
+                if (!Data.SendedToIP.Contains(IP))
+                {
+                  Data.SendedToIP.Add(IP);
+                  ReadyToSend.Add(Data);
+                }
+              }
+            if (ReadyToSend.Count != 0)
+            {
+              var Thread = Corrispondence.Key;
+              DataToSend.Add(Thread, ReadyToSend);
+              ToRemove.Add(Thread);
+            }
+          }
+          foreach (var Thread in ToRemove)
+          {
+            ThreadsIP.Remove(Thread);
+            Thread.Resume();
+          }
+        }
+      }
+    }
+    /// <summary>
+    /// Contains the logic that establishes a mapping of the network and its subdivision to increase its performance.
+    /// The network is divided at a logical level into many ring groups, with a recursive pyramidal structure
+    /// </summary>
+    private static class MappingNetwork
+    {
+      internal const int GroupSize = 20;
+      static private int Levels;
+      static public TimeSpan NetworkSyncTimeSpan;
       static List<List<Node>> NetworkGroups = new List<List<Node>>();//All groups of the network
       static List<List<Node>> MyGroups = new List<List<Node>>();//Only my groups
-      static List<NextNode> MyNextNodes = new List<NextNode>();//Communication nodes
-      private static void SetNodeGroups(Node[] NodeList)
+      static List<NextNode> NodeToConnect = new List<NextNode>();//Communication nodes
+
+      internal static void SetNodeGroups(List<Node> NodeList)
       {
+        Levels = 0;
         var Nodes = new List<Node>(NodeList);
-        lock (NodeList)
+        lock (NetworkGroups)
         {
           List<List<Node>> Groups = null;
           do
           {
+            Levels += 1;
             if (Nodes == null)
               Nodes = HorizontalNodes(Groups);
             Groups = Regroup(Nodes);
             NetworkGroups.AddRange(Groups);
             Nodes = null;
           } while (Groups.Count > 1);
-        }
-        foreach (var item in NetworkGroups)
-          if (item.Contains(MyNode))
+          NetworkSyncTimeSpan = TimeSpan.FromMilliseconds(Spooler.Sec * (Levels + 3));// +3 is a security margin
+          //Find groups whit MyNode
+          lock (MyGroups)
           {
-            MyGroups.Add(item);
-            if (item.Count > 1)
+            MyGroups.Clear();
+            lock (NodeToConnect)
             {
-              var NextNode = new NextNode();
-              MyNextNodes.Add(NextNode);
-              NextNode.GroupId = NetworkGroups.IndexOf(item);
-              if (item.Last() == MyNode)
-                NextNode.Node = item.First();
-              else
-                NextNode.Node = item[item.IndexOf(MyNode) + 1];
+              NodeToConnect.Clear();
+              foreach (var item in NetworkGroups)
+                if (item.Contains(MyNode))
+                {
+                  MyGroups.Add(item);
+                  if (item.Count > 1)
+                  {
+                    var NextNode = new NextNode();
+                    if (item.Last() == MyNode)
+                      NextNode.Node = item.First();
+                    else
+                      NextNode.Node = item[item.IndexOf(MyNode) + 1];
+                    if (NextNode.Node != MyNode)
+                    {
+                      NextNode.GroupId = NetworkGroups.IndexOf(item);
+                      NodeToConnect.Add(NextNode);
+                    }
+                  }
+                }
             }
           }
+        }
       }
       class NextNode
       {
         public int GroupId;
         public Node Node;
       }
-
-      //private static List<List<Node>> MappingGroup()
-      //{
-      //  var Groups = new List<List<Node>>();
-      //  var Group = new List<Node>();
-      //  foreach (var Node in NodeList)
-      //  {
-      //    if (Group.Count == 0)
-      //      Groups.Add(Group);
-      //    Group.Add(Node);
-      //    if (Group.Count == 20)
-      //      Group = new List<Node>();
-      //  }
-      //  return Groups;
-      //}
-
+      private static void ConnectToNextNodes()
+      {
+        lock (NodeToConnect)
+          foreach (var NextNode in NodeToConnect)
+          {
+            Protocol.ConnectToNode(NextNode.Node);
+          }
+      }
       private static List<Node> HorizontalNodes(List<List<Node>> NodeGroups)
       {
         var NodeList = new List<Node>();
         foreach (var item in NodeGroups)
           NodeList.Add(item[0]);
+        foreach (var item in NodeGroups)
+        {
+          int id = GroupSize / 2;
+          if (id >= item.Count)
+            id = item.Count - 1;
+          if (!NodeList.Contains(item[id]))
+            NodeList.Add(item[id]);
+        }
         return NodeList;
       }
-
       private static List<List<Node>> Regroup(List<Node> Nodes)
       {
         var Groups = new List<List<Node>>();
@@ -162,34 +262,162 @@ namespace NetworkManager
           if (Group.Count == 0)
             Groups.Add(Group);
           Group.Add(Node);
-          if (Group.Count == 20)
+          if (Group.Count == GroupSize)
             Group = new List<Node>();
         }
         return Groups;
       }
     }
-    public static bool OnReceivesHttpRequest(Dictionary<string, string> QueryString, Dictionary<string, string> Form, out string ContentType, System.IO.Stream OutputStream)
+    /// <summary>
+    /// The buffer is a mechanism that allows you to distribute objects on the network by assigning a timestamp.
+    /// The objects inserted in the buffer will exit from it on all the nodes following the chronological order of input(they come out sorted by timestamp).
+    /// The data output from the buffar must be managed by actions that are programmed when the network is initialized.
+    /// </summary>
+    static public class BufferManager
+    {
+      /// <summary>
+      /// Send an object to the network to be inserted in the shared buffer
+      /// </summary>
+      /// <param name="Object">Object to send</param>
+      /// <returns></returns>
+      static public bool AddToSaredBuffer(object Object)
+      {
+        return Protocol.AddToSharedBuffer(Object) == Protocol.StandardAnsware.Ok;
+        //return InteractWithRandomNode((Node Node) =>
+        // {
+        // });
+      }
+      static private System.Threading.Timer Process = new System.Threading.Timer(ToDoEverySec, null, 1000, 1000);
+      static private void ToDoEverySec(object x)
+      {
+        lock (Buffer)
+        {
+          var ToRemove = new List<ElementBeffer>();
+          foreach (var item in Buffer)
+          {
+            if ((Now() - item.Timestamp) >= MappingNetwork.NetworkSyncTimeSpan)
+            {
+              ToRemove.Add(item);
+              var ObjectName = GetObjectName(item.XmlObject);
+              if (BufferCompletedAction.TryGetValue(ObjectName, out SyncData Action))
+                Action.Invoke(item.XmlObject, item.Timestamp);
+              //foreach (SyncData Action in BufferCompletedAction)
+              //  Action.Invoke(item.XmlObject, item.Timestamp);
+            }
+            else
+              break;//because the beffer is sorted by Timespan
+          }
+          foreach (var item in ToRemove)
+            Buffer.Remove(item);
+        }
+      }
+
+      /// <summary>
+      /// Insert the object in the local buffer to be synchronized
+      /// </summary>
+      /// <param name="XmlObject">Serialized object im format xml</param>
+      /// <returns></returns>
+      static internal bool AddLocal(string XmlObject)
+      {
+        if (string.IsNullOrEmpty(XmlObject))
+          return false;
+        else
+        {
+          DateTime Timestamp = Network.Now();
+          var Element = new Element() { Timestamp = Timestamp, XmlObject = XmlObject };
+          lock (Buffer)
+          {
+            Buffer.Add((ElementBeffer)Element);
+            SortBuffer();
+          }
+          return true;
+        }
+      }
+      static internal void AddLocal(List<Element> Elements)
+      {
+        lock (Buffer)
+        {
+          var Count = Buffer.Count();
+          foreach (var Element in Elements)
+          {
+            if (Buffer.Find((x) => x.Timestamp == Element.Timestamp && x.XmlObject == Element.XmlObject) == null)
+              Buffer.Add((ElementBeffer)Element);
+          }
+          if (Count != Buffer.Count())
+            SortBuffer();
+        }
+      }
+      static void SortBuffer()
+      {
+        Buffer.OrderBy(x => x.XmlObject);//Used for the element whit same Timestamp
+        Buffer.OrderBy(x => x.Timestamp);
+      }
+      static internal List<ElementBeffer> Buffer;
+      internal class ElementBeffer : Element
+      {
+        public List<String> SendedToIP = new List<String>();
+      }
+      public class Element
+      {
+        public DateTime Timestamp;
+        public string XmlObject;
+      }
+      public delegate void SyncData(string XmlObject, DateTime Timestamp);
+      /// <summary>
+      /// Add a action used to local sync the objects in the buffer
+      /// </summary>
+      /// <param name="Action">Action to execute for every object</param>
+      /// <param name="ForObjectName">Indicates what kind of objects will be treated by this action</param>
+      static public bool AddSyncDataAction(SyncData Action, string ForObjectName)
+      {
+        if (BufferCompletedAction.ContainsKey(ForObjectName))
+          return false;
+        BufferCompletedAction.Add(ForObjectName, Action);
+        return true;
+      }
+      static private Dictionary<string, SyncData> BufferCompletedAction = new Dictionary<string, SyncData>();
+      static private string GetObjectName(string XmlObject)
+      {
+        if (!string.IsNullOrEmpty(XmlObject))
+        {
+          var p1 = XmlObject.IndexOf('>');
+          if (p1 != -1)
+          {
+            var p2 = XmlObject.IndexOf('<', p1);
+            if (p2 != -1)
+            {
+              var p3 = XmlObject.IndexOf('>', p2);
+              if (p3 != -1)
+              {
+                return XmlObject.Substring(p2 + 1, p3 - p2 - 1);
+              }
+            }
+          }
+        }
+        return null;
+      }
+    }
+
+    public static bool OnReceivesHttpRequest(System.Collections.Specialized.NameValueCollection QueryString, System.Collections.Specialized.NameValueCollection Form, string FromIP, out string ContentType, System.IO.Stream OutputStream)
     {
       //Setting = CurrentSetting();
       //Response.Cache.SetCacheability(System.Web.HttpCacheability.NoCache);
 
-      QueryString.TryGetValue("network", out string NetworkName);
+      var NetworkName = QueryString["network"];
+      //QueryString.TryGetValue("network", out string NetworkName);
+
       if (Setup.Network.NetworkName == NetworkName)
       {
-        QueryString.TryGetValue("app", out string AppName);
-        QueryString.TryGetValue("touser", out string ToUser);
-        QueryString.TryGetValue("fromuser", out string FromUser);
-        QueryString.TryGetValue("post", out string Post); //is a GetType Name
-        QueryString.TryGetValue("request", out string Request);
-        int SecTimeout;
-        if (QueryString.ContainsKey("sectimeout"))
-          SecTimeout = int.Parse(QueryString["sectimeout"]);
-        int SecWaitAnswer;
-        if (QueryString.ContainsKey("secwaitanswer"))
-          SecWaitAnswer = int.Parse(QueryString["secwaitanswer"]);
+        var AppName = QueryString["app"];
+        var ToUser = QueryString["touser"];
+        var FromUser = QueryString["fromuser"];
+        var Post = QueryString["post"];
+        var Request = QueryString["request"];
+        int.TryParse(QueryString["sectimeout"], out int SecTimeout);
+        int.TryParse(QueryString["secwaitanswer"], out int SecWaitAnswer);
 
         string XmlObject = null;
-        if (Form.ContainsKey("object"))
+        if (Form["object"] != null)
           XmlObject = Converter.Base64ToString(Form["object"]);
 
         if (ToUser == Setup.Network.MachineName || ToUser.StartsWith(Setup.Network.MachineName + "."))
@@ -232,10 +460,25 @@ namespace NetworkManager
               {
                 if (Protocol.OnRequestActions.ContainsKey(Request))
                   ReturnObject = Protocol.OnRequestActions[Request](XmlObject);
+
                 if (Protocol.StandardRequest.TryParse(Request, out Protocol.StandardRequest Rq))
                 {
                   if (Rq == Protocol.StandardRequest.NetworkNodes)
                     ReturnObject = NodeList;
+                  else if (Rq == Protocol.StandardRequest.Connect)
+                  {
+                    if (Spooler.ThreadBlock(System.Threading.Thread.CurrentThread, FromIP) == true)
+                    {
+                      ReturnObject = Spooler.GetElements();
+                    }
+                    else
+                      ReturnObject = Protocol.StandardAnsware.Declined;
+                  }
+                  else if (Rq == Protocol.StandardRequest.AddToBuffer)
+                    if (Network.BufferManager.AddLocal(XmlObject) == true)
+                      ReturnObject = Protocol.StandardAnsware.Ok;
+                    else
+                      ReturnObject = Protocol.StandardAnsware.Error;
                   else if (Rq == Protocol.StandardRequest.ImOffline || Rq == Protocol.StandardRequest.ImOnline)
                     if (Converter.XmlToObject(XmlObject, typeof(Node), out object ObjNode))
                     {
@@ -243,18 +486,26 @@ namespace NetworkManager
                       ReturnObject = Protocol.StandardAnsware.Ok;
                       if (Rq == Protocol.StandardRequest.ImOnline)
                       {
-                        foreach (var item in NodeList)
+                        Node.DetectIP();
+                        if (Node.IP != "127.0.0.1" && NodeList.Select(x => x.IP == Node.IP) != null)
+                          ReturnObject = Protocol.StandardAnsware.DuplicateIP;
+                        else
                         {
-                          if (item.Address == Node.Address)
-                          {
-                            ReturnObject = Protocol.StandardAnsware.Reject;
-                            break;
-                          }
+                          if (Protocol.SpeedTest(Node))
+                            lock (NodeList)
+                            {
+                              NodeList.Add(Node);
+                              NodeList = NodeList.OrderBy(o => o.Address).ToList();
+                            }
+                          else
+                            ReturnObject = Protocol.StandardAnsware.TooSlow;
                         }
                       }
                     }
                     else
                       ReturnObject = Protocol.StandardAnsware.Error;
+                  else if (Rq == Protocol.StandardRequest.TestSpeed)
+                    ReturnObject = new string('x', 1048576);
                   ContentType = "text/xml;charset=utf-8";
                   XmlSerializer xml = new XmlSerializer(ReturnObject.GetType());
                   XmlSerializerNamespaces xmlns = new XmlSerializerNamespaces();
@@ -348,8 +599,7 @@ namespace NetworkManager
           Parser = (String Html) =>
           {
             ObjectVector ObjectVector = null;
-            object ReturmObj;
-            Converter.XmlToObject(Html, typeof(ObjectVector), out ReturmObj);
+            Converter.XmlToObject(Html, typeof(ObjectVector), out object ReturmObj);
             ObjectVector = (ObjectVector)ReturmObj;
             if (ObjectVector != null)
               ExecuteOnReceivedObject.Invoke(ObjectVector.FromUser, ObjectVector.ObjectName, ObjectVector.XmlObject);
@@ -464,12 +714,13 @@ namespace NetworkManager
 
         private void Start(string Url, bool Async)
         {
+          if (Dictionary == null)
+            Dictionary = new System.Collections.Specialized.NameValueCollection();
           if (Async)
-            WebClient.OpenReadAsync(new Uri(Url));
+            WebClient.UploadValuesAsync(new Uri(Url), "POST", Dictionary);
+          //WebClient.OpenReadAsync(new Uri(Url));
           else
           {
-            if (Dictionary == null)
-              Dictionary = new System.Collections.Specialized.NameValueCollection();
             try
             {
               var responsebytes = WebClient.UploadValues(Url, "POST", Dictionary);
@@ -636,15 +887,31 @@ namespace NetworkManager
       {
         return NotifyToNode(Request.ToString(), Obj, ToNode);
       }
-      internal enum StandardRequest { NetworkNodes, ImOnline, ImOffline }
-      internal enum StandardAnsware { Ok, Error, Reject, Failure }
-      internal static Node[] GetNetworkNodes()
+      internal enum StandardRequest { NetworkNodes, ImOnline, ImOffline, TestSpeed, AddToBuffer, Connect }
+      public enum StandardAnsware { Ok, Error, DuplicateIP, TooSlow, Failure, NoAnsware, Declined }
+      internal static List<Node> GetNetworkNodes()
       {
         var XmlResult = SendRequest(StandardRequest.NetworkNodes);
         if (string.IsNullOrEmpty(XmlResult))
-          return null;
-        Converter.XmlToObject(XmlResult, typeof(Node[]), out object ReturmObj);
-        return (Node[])ReturmObj;
+          return new List<Node>();
+        Converter.XmlToObject(XmlResult, typeof(List<Node>), out object ReturmObj);
+        NodeList = (List<Node>)ReturmObj;
+        lock (NodeList)
+        {
+          if (!String.IsNullOrEmpty(Setup.Network.MyAddress))
+          {
+            var Answare = Protocol.ImOnline(new Node { MachineName = Setup.Network.MachineName, Address = Setup.Network.MyAddress });
+            // if Answare = NoAnsware then I'm the first online node in the network  
+            NodeList.RemoveAll(x => x.Address == MyNode.Address);
+            NodeList.Add(MyNode);
+          }
+          NodeList = NodeList.OrderBy(o => o.Address).ToList();
+        }
+        if (MyNode != null)
+        {
+          MappingNetwork.SetNodeGroups(NodeList);
+        }
+        return NodeList;
       }
       internal static StandardAnsware ImOffline()
       {
@@ -660,25 +927,144 @@ namespace NetworkManager
           }
         return StandardAnsware.Error;
       }
-      internal static StandardAnsware ImOnline()
+      internal static StandardAnsware ImOnline(Node MyNode)
       {
         var XmlResult = SendRequest(StandardRequest.ImOnline, MyNode);
-        if (!string.IsNullOrEmpty(XmlResult))
-          try
-          {
-            Converter.XmlToObject(XmlResult, typeof(StandardAnsware), out object Answare);
-            return (StandardAnsware)Answare;
-          }
-          catch (Exception)
-          {
-          }
+        MyNode.DetectIP();
+        Network.MyNode = MyNode;
+        if (string.IsNullOrEmpty(XmlResult))
+          return StandardAnsware.NoAnsware;
+        try
+        {
+          Converter.XmlToObject(XmlResult, typeof(StandardAnsware), out object Answare);
+          return (StandardAnsware)Answare;
+        }
+        catch (Exception)
+        {
+        }
         return StandardAnsware.Error;
       }
+      internal static bool SpeedTest(Node NodeToTesting)
+      {
+
+        var Start = DateTime.UtcNow;
+        for (int i = 0; i < 10; i++)
+        {
+          var XmlResult = SendRequest(StandardRequest.TestSpeed, null, NodeToTesting);
+          if (XmlResult == null || XmlResult.Length != 1048616)
+            return false;
+        }
+        var Speed = (DateTime.UtcNow - Start).TotalMilliseconds;
+        return Speed <= 3000;
+      }
+      internal static StandardAnsware AddToSharedBuffer(Object Object)
+      {
+        try
+        {
+          var XmlResult = SendRequest(StandardRequest.AddToBuffer, Object);
+          //var XmlResult = Comunication.SendObjectSync(Object, Node.Address, null, Node.MachineName);
+          if (string.IsNullOrEmpty(XmlResult))
+            return StandardAnsware.NoAnsware;
+          else
+          {
+            object ReturmObj;
+            Converter.XmlToObject(XmlResult, typeof(Protocol.StandardAnsware), out ReturmObj);
+            StandardAnsware Answare = (StandardAnsware)ReturmObj;
+            return Answare;
+          }
+        }
+        catch (Exception)
+        {
+          return StandardAnsware.Error;
+        }
+      }
+      private static Dictionary<Node, int> FailureList = new Dictionary<Node, int>();
+      internal static void ConnectToNode(Node Node)
+      {
+        new System.Threading.Thread(() =>
+        {
+          var XmlResult = SendRequest(StandardRequest.Connect, null, Node);
+          if (string.IsNullOrEmpty(XmlResult))
+          {
+            //the node is disconnected
+            if (NodeList.Contains(Node))
+            {
+              //try reconnect
+              if (OnlineDetection.CheckImOnline())
+              {
+                int Attempts;
+                lock (FailureList)
+                {
+                  if (FailureList.TryGetValue(Node, out Attempts))
+                  {
+                    FailureList.Remove(Node);
+                    Attempts += 1;
+                    FailureList.Add(Node, Attempts);
+                  }
+                  else
+                  {
+                    Attempts = 1;
+                    FailureList.Add(Node, 1);
+                  }
+                }
+                if (Attempts < 3)
+                  ConnectToNode(Node);
+              }
+              else
+                OnlineDetection.WaitForInternetConnection();
+            }
+          }
+          else
+          {
+            lock (FailureList)
+              if (FailureList.ContainsKey(Node))
+                FailureList.Remove(Node);
+          }
+        }).Start();
+      }
     }
-    //public enum Message { ImOnline, ImOfflone }
-    //private static string SendMessage(Message Message, Node ToNode = null)
-    //{
-    //  return NotifyToNode(Message.ToString(), ToNode);
-    //}
+    private static class OnlineDetection
+    {
+      internal static bool CheckImOnline()
+      {
+        try
+        {
+          bool r1 = (new System.Net.NetworkInformation.Ping().Send("www.google.com.mx").Status == System.Net.NetworkInformation.IPStatus.Success);
+          bool r2 = (new System.Net.NetworkInformation.Ping().Send("www.bing.com").Status == System.Net.NetworkInformation.IPStatus.Success);
+          return r1 && r2;
+        }
+        catch (Exception)
+        {
+          return false;
+        }
+      }
+      private static bool IsOnline;
+      private static System.Threading.Timer CheckInternetConnection = new System.Threading.Timer((object obj) =>
+      {
+        IsOnline = CheckImOnline();
+        if (IsOnline)
+        {
+          CheckInternetConnection.Change(System.Threading.Timeout.Infinite, System.Threading.Timeout.Infinite);
+          Running = 0;
+          if (Setup.Network.EntryPoints != null)
+          {
+            var EntryPointsList = Setup.Network.EntryPoints.ToList();
+            EntryPointsList.RemoveAll(x => x.Address == Setup.Network.MyAddress);
+            NodeList = EntryPointsList;
+          }
+          NodeList = Protocol.GetNetworkNodes();
+        }
+      }, null, System.Threading.Timeout.Infinite, System.Threading.Timeout.Infinite);
+      private static int Running = 0;
+      /// <summary>
+      /// He waits and checks the internet connection, and starts the communication protocol by notifying the online presence
+      /// </summary>
+      internal static void WaitForInternetConnection()
+      {
+        Running += 1;
+        if (Running == 1)
+          CheckInternetConnection.Change(0, 30000);
+      }
+    }
   }
 }

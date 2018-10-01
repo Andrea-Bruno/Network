@@ -3,6 +3,7 @@
   <PropertyGroup>
     <TargetFramework>netstandard2.0</TargetFramework>
     <AssemblyName>Network</AssemblyName>
+    <Configurations>Debug;Release;DebugNetwork</Configurations>
   </PropertyGroup>
 
 </Project>
