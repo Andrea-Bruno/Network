@@ -9,6 +9,26 @@ namespace NetworkManager
 {
   public static class Network
   {
+    //==== REMOVE THE TEST IN THE FINAL VERSION
+    public static void Test()
+    {
+      var list = new List<Node>();
+      for (int y = 0; y < 100; y++)
+      {
+        for (int x = 0; x < 100; x++)
+        {
+          var Node = new Node() { Address = x.ToString() + "," + y.ToString() };
+          list.Add(Node);
+        }
+      }
+      NodeList = list;
+      MyNode = GetRandomNode();
+      MappingNetwork.SetNodeNetwork();
+      MappingNetwork.GetXY(MyNode, out int X, out int Y);
+      var mynode = MappingNetwork.GetNodeAtPosition(X, Y);
+      var connections = MappingNetwork.GetConnections(1);
+    }
+
     /// <summary>
     /// This method initializes the network.
     /// You can join the network as a node, and contribute to decentralization, or hook yourself to the network as an external user.
@@ -99,69 +119,47 @@ namespace NetworkManager
     /// </summary>
     private static class Spooler
     {
-      //static private Dictionary<string, List<BufferManager.Element>> DataSendedMemory = new Dictionary<string, List<BufferManager.Element>>();
-      static internal void AddDatas(List<BufferManager.Element> Datas)
+      static private int SpoolerTimeMs = 1000;
+      static private int PauseBetweenTransmissionOnTheNode = 2000;
+      static private Dictionary<Node, DateTime> LastTransmission = new Dictionary<Node, DateTime>();
+      static private System.Threading.Timer Process = new System.Threading.Timer((x) => { DataDelivery(); }, null, 1000, 1000);
+      static internal void DataDelivery()
       {
-        BufferManager.AddLocal(Datas);
-      }
-      private static Dictionary<System.Threading.Thread, string> ThreadsIP = new Dictionary<System.Threading.Thread, string>();
-      //private static List<System.Threading.Thread> ThreadList = new List<System.Threading.Thread>();
-      internal static bool ThreadBlock(System.Threading.Thread Thread, string NodeIp)
-      {
-        if (NodeList.Find((x) => x.IP == NodeIp) != null)
+        var DataToNode = new Dictionary<Node, List<BufferManager.ObjToNode>>();
+        lock (BufferManager.Buffer)
+          foreach (var Data in BufferManager.Buffer)
+            lock (Data.Levels)
+              foreach (var Level in Data.Levels)
+                foreach (var Node in MappingNetwork.GetConnections(Level))
+                  if (!Data.SendedNode.Contains(Node))
+                  {
+                    var MillisecondsFromLastTransmission = int.MaxValue;
+                    lock (LastTransmission)
+                      if (LastTransmission.TryGetValue(Node, out DateTime TrasmissionTime))
+                        MillisecondsFromLastTransmission = (int)(DateTime.UtcNow - TrasmissionTime).TotalMilliseconds;
+                    if (MillisecondsFromLastTransmission > PauseBetweenTransmissionOnTheNode)
+                    {
+                      List<BufferManager.ObjToNode> ToSendToNode;
+                      if (!DataToNode.TryGetValue(Node, out ToSendToNode))
+                      {
+                        ToSendToNode = new List<BufferManager.ObjToNode>();
+                        DataToNode.Add(Node, ToSendToNode);
+                      }
+                      var Element = (BufferManager.Element)Data;
+                      var ElementToNode = (BufferManager.ObjToNode)Element;
+                      ElementToNode.Level = Level;
+                      ToSendToNode.Add(ElementToNode);
+                      lock (Data.SendedNode)
+                        Data.SendedNode.Add(Node);
+                    }
+                  }
+        foreach (var ToSend in DataToNode)
         {
-          Thread.Suspend();
-          lock (ThreadsIP)
-            ThreadsIP.Add(Thread, NodeIp);
-          return true;
-        }
-        else
-          return false;
-      }
-      static private Dictionary<System.Threading.Thread, List<BufferManager.Element>> DataToSend = new Dictionary<System.Threading.Thread, List<BufferManager.Element>>();
-      static internal List<BufferManager.Element> GetElements()
-      {
-        var Elements = DataToSend[System.Threading.Thread.CurrentThread];
-        lock (DataToSend)
-          DataToSend.Remove(System.Threading.Thread.CurrentThread);
-        return Elements;
-      }
-      internal static int SyncGroupTimer = MappingNetwork.GroupSize / 4; //Milliseconds
-      static private System.Threading.Timer Process = new System.Threading.Timer(TimerEvent, null, SyncGroupTimer, SyncGroupTimer);
-      static private void TimerEvent(object x)
-      {
-        var ToRemove = new List<System.Threading.Thread>();
-        lock (ThreadsIP)
-        {
-          foreach (var Corrispondence in ThreadsIP)
+          Protocol.SendElementsToNode(ToSend.Value, ToSend.Key);
+          lock (LastTransmission)
           {
-            var IP = Corrispondence.Value;
-            //if (DataSendedMemory.TryGetValue(IP, out List<BufferManager.Element> Sended) == false)
-            //{
-            //  Sended = new List<BufferManager.Element>();
-            //  DataSendedMemory.Add(IP, Sended);
-            //}
-            var ReadyToSend = new List<BufferManager.Element>();
-            lock (BufferManager.Buffer)
-              foreach (var Data in BufferManager.Buffer)
-              {
-                if (!Data.SendedToIP.Contains(IP))
-                {
-                  Data.SendedToIP.Add(IP);
-                  ReadyToSend.Add(Data);
-                }
-              }
-            if (ReadyToSend.Count != 0)
-            {
-              var Thread = Corrispondence.Key;
-              DataToSend.Add(Thread, ReadyToSend);
-              ToRemove.Add(Thread);
-            }
-          }
-          foreach (var Thread in ToRemove)
-          {
-            ThreadsIP.Remove(Thread);
-            Thread.Resume();
+            LastTransmission.Remove(ToSend.Key);
+            LastTransmission.Add(ToSend.Key, DateTime.UtcNow);
           }
         }
       }
@@ -172,108 +170,79 @@ namespace NetworkManager
     /// </summary>
     private static class MappingNetwork
     {
-      internal const int GroupSize = 20;
-      static private int Levels;
+      static private int SquareSide = 0;
+      static private int MyX = 0;
+      static private int MyY = 0;
       static internal TimeSpan NetworkSyncTimeSpan;
       static internal void SetNetworkSyncTimeSpan(int Latency)
       {
         if (Latency != 0)
           NetworkSyncTimeSpan = TimeSpan.FromMilliseconds(Latency * 1.2);
       }
-      //static private TimeSpan 
-      static List<List<Node>> NetworkGroups = new List<List<Node>>();//All groups of the network
-      static List<List<Node>> MyGroups = new List<List<Node>>();//Only my groups
-      static List<NextNode> NodeToConnect = new List<NextNode>();//Communication nodes
+      static internal void GetXY(Node Node, out int X, out int Y)
+      {
+        var Position = NodeList.IndexOf(Node);
+        X = Position % SquareSide;
+        Y = (int)Position / SquareSide;
+      }
 
-      internal static void SetNodeGroups(List<Node> NodeList)
+      static internal Node GetNodeAtPosition(int X, int Y)
       {
-        Levels = 0;
-        var Nodes = new List<Node>(NodeList);
-        lock (NetworkGroups)
+        var id = (Y * SquareSide + X);
+        if (id >= 0 && id < NodeList.Count)
+          return NodeList[id];
+        else
+          return NodeList[Mod(id, NodeList.Count)];
+      }
+
+      /// <summary>
+      /// Mod operator: Divides two numbers and returns only the remainder.
+      /// NOTE: The calculation of the module with negative numbers in c # is wrong!
+      /// </summary>
+      /// <param name="a">Any numeric expression</param>
+      /// <param name="b">Any numeric expression</param>
+      /// <returns></returns>
+      static private int Mod(int a, int b)
+      {
+        return (int)(a - b * Math.Floor((double)a / (double)b));
+      }
+      internal static void SetNodeNetwork()
+      {
+        SquareSide = (int)Math.Ceiling(Math.Sqrt(NodeList.Count));
+        GetXY(MyNode, out MyX, out MyY);
+        CacheConnections = new Dictionary<int, List<Node>>();
+      }
+      internal static Dictionary<int, List<Node>> CacheConnections = new Dictionary<int, List<Node>>();
+      /// <summary>
+      /// All connections that have the node at a certain level
+      /// </summary>
+      /// <param name="Level">The level is base 1</param>
+      /// <returns>The list of nodes connected to the level</returns>
+      internal static List<Node> GetConnections(int Level)
+      {
+        int Distance = SquareSide / (int)Math.Pow(3, Level);
+        if (Distance < 1)
+          Distance = 1;
+        lock (CacheConnections)
         {
-          List<List<Node>> Groups = null;
-          do
-          {
-            Levels += 1;
-            if (Nodes == null)
-              Nodes = HorizontalNodes(Groups);
-            Groups = Regroup(Nodes);
-            NetworkGroups.AddRange(Groups);
-            Nodes = null;
-          } while (Groups.Count > 1);
-          var TimeNecessaryToSyncAGroup = Spooler.SyncGroupTimer * 2; // (Milliseconds) Timer elapsed + transmission data time
-          SetNetworkSyncTimeSpan(TimeNecessaryToSyncAGroup * (Levels + 2)); // +2 is a security margin
-          //Find groups whit MyNode
-          lock (MyGroups)
-          {
-            MyGroups.Clear();
-            lock (NodeToConnect)
-            {
-              NodeToConnect.Clear();
-              foreach (var item in NetworkGroups)
-                if (item.Contains(MyNode))
-                {
-                  MyGroups.Add(item);
-                  if (item.Count > 1)
-                  {
-                    var NextNode = new NextNode();
-                    if (item.Last() == MyNode)
-                      NextNode.Node = item.First();
-                    else
-                      NextNode.Node = item[item.IndexOf(MyNode) + 1];
-                    if (NextNode.Node != MyNode)
-                    {
-                      NextNode.GroupId = NetworkGroups.IndexOf(item);
-                      NodeToConnect.Add(NextNode);
-                    }
-                  }
-                }
-            }
-          }
+          if (CacheConnections.TryGetValue(Distance, out List<Node> List))
+            return List;
+          List = new List<Node>();
+          for (int UpDown = -1; UpDown <= 1; UpDown++)
+            for (int LeftRight = -1; LeftRight <= 1; LeftRight++)
+              if (LeftRight != 0 || UpDown != 0)
+              {
+                var X = MyX + Distance * LeftRight;
+                var Y = MyY + Distance * UpDown;
+                var Connection = GetNodeAtPosition(X, Y);
+                if (!List.Contains(Connection))
+                  List.Add(Connection);
+              }
+          CacheConnections.Add(Distance, List);
+          return List;
         }
       }
-      class NextNode
-      {
-        public int GroupId;
-        public Node Node;
-      }
-      private static void ConnectToNextNodes()
-      {
-        lock (NodeToConnect)
-          foreach (var NextNode in NodeToConnect)
-          {
-            Protocol.ConnectToNode(NextNode.Node);
-          }
-      }
-      private static List<Node> HorizontalNodes(List<List<Node>> NodeGroups)
-      {
-        var NodeList = new List<Node>();
-        foreach (var item in NodeGroups)
-          NodeList.Add(item[0]);
-        foreach (var item in NodeGroups)
-        {
-          int id = GroupSize / 2;
-          if (id >= item.Count)
-            id = item.Count - 1;
-          if (!NodeList.Contains(item[id]))
-            NodeList.Add(item[id]);
-        }
-        return NodeList;
-      }
-      private static List<List<Node>> Regroup(List<Node> Nodes)
-      {
-        var Groups = new List<List<Node>>();
-        var Group = new List<Node>();
-        foreach (var Node in Nodes)
-        {
-          if (Group.Count == 0)
-            Groups.Add(Group);
-          Group.Add(Node);
-          if (Group.Count == GroupSize)
-            Group = new List<Node>();
-        }
-        return Groups;
-      }
+
     }
     /// <summary>
     /// The buffer is a mechanism that allows you to distribute objects on the network by assigning a timestamp.
@@ -299,7 +268,7 @@ namespace NetworkManager
       {
         lock (Buffer)
         {
-          var ToRemove = new List<ElementBeffer>();
+          var ToRemove = new List<ElementBuffer>();
           var ThisTime = Now();
           foreach (var item in Buffer)
           {
@@ -336,38 +305,45 @@ namespace NetworkManager
           var Element = new Element() { Timestamp = Timestamp, XmlObject = XmlObject };
           lock (Buffer)
           {
-            Buffer.Add((ElementBeffer)Element);
+            var ElementBuffer = (ElementBuffer)Element;
+            ElementBuffer.Levels.Add(1);
+            Buffer.Add(ElementBuffer);
             SortBuffer();
           }
+          Spooler.DataDelivery();
           return true;
         }
       }
 
       /// <summary>
-      /// Insert the object in the local buffer to be synchronized
+      /// Insert the objects in the local buffer to be synchronized
       /// The elements come from other nodes
       /// </summary>
       /// <param name="Elements">Elements come from other nodes</param>
-      static internal void AddLocal(List<Element> Elements)
+      static internal void AddLocalFromNode(List<ObjToNode> Elements)
       {
         lock (Buffer)
         {
           var Count = Buffer.Count();
           var ThisTime = Now();
-          foreach (var Element in Elements)
+          foreach (var ObjToNode in Elements)
           {
-            var TimePassedFromInsertion = ThisTime - Element.Timestamp;
+            var TimePassedFromInsertion = ThisTime - ObjToNode.Timestamp;
             UpdateStats(TimePassedFromInsertion);
             if ((TimePassedFromInsertion) <= MappingNetwork.NetworkSyncTimeSpan)
             {
-              var ElementBeffer = Buffer.Find((x) => x.Timestamp == Element.Timestamp && x.XmlObject == Element.XmlObject);
-              if (ElementBeffer == null)
+              var Level = ObjToNode.Level + 1;
+              var ElementBuffer = Buffer.Find((x) => x.Timestamp == ObjToNode.Timestamp && x.XmlObject == ObjToNode.XmlObject);
+              if (ElementBuffer == null)
               {
                 UpdateStats(TimePassedFromInsertion, true);
-                ElementBeffer = (ElementBeffer)Element;
-                Buffer.Add(ElementBeffer);
+                ElementBuffer = (ElementBuffer)(Element)ObjToNode;
+                Buffer.Add(ElementBuffer);
               }
-              ElementBeffer.Received++;
+              lock (ElementBuffer.Levels)
+                if (!ElementBuffer.Levels.Contains(Level))
+                  ElementBuffer.Levels.Add(Level);
+              ElementBuffer.Received++;
             }
             else
             {
@@ -377,7 +353,10 @@ namespace NetworkManager
             }
           }
           if (Count != Buffer.Count())
+          {
             SortBuffer();
+            Spooler.DataDelivery();
+          }
         }
       }
       static private void UpdateStats(TimeSpan Value, bool FirstAdd = false)
@@ -417,16 +396,21 @@ namespace NetworkManager
         Buffer.OrderBy(x => x.XmlObject);//Used for the element whit same Timestamp
         Buffer.OrderBy(x => x.Timestamp);
       }
-      static internal List<ElementBeffer> Buffer;
-      internal class ElementBeffer : Element
+      static internal List<ElementBuffer> Buffer = new List<ElementBuffer>();
+      internal class ElementBuffer : Element
       {
-        public List<String> SendedToIP = new List<String>();
+        public List<Node> SendedNode = new List<Node>();
         public int Received;
+        public List<int> Levels = new List<int>();
       }
       public class Element
       {
         public DateTime Timestamp;
         public string XmlObject;
+      }
+      public class ObjToNode : Element
+      {
+        public int Level;
       }
       public delegate void SyncData(string XmlObject, DateTime Timestamp);
       /// <summary>
@@ -535,15 +519,14 @@ namespace NetworkManager
                   {
                     ReturnObject = new Protocol.Stats { NetworkLatency = (int)BufferManager.Stats24h.NetworkLatency.TotalMilliseconds };
                   }
-                  else if (Rq == Protocol.StandardMessages.Connect)
-                  {
-                    if (Spooler.ThreadBlock(System.Threading.Thread.CurrentThread, FromIP) == true)
+                  else if (Rq == Protocol.StandardMessages.SendElementsToNode)
+                    if (Converter.XmlToObject(XmlObject, typeof(List<BufferManager.ObjToNode>), out object ObjElements))
                     {
-                      ReturnObject = Spooler.GetElements();
+                      Network.BufferManager.AddLocalFromNode((List<BufferManager.ObjToNode>)ObjElements);
+                      ReturnObject = Protocol.StandardAnsware.Ok;
                     }
                     else
-                      ReturnObject = Protocol.StandardAnsware.Declined;
-                  }
+                      ReturnObject = Protocol.StandardAnsware.Error;
                   else if (Rq == Protocol.StandardMessages.AddToBuffer)
                     if (Network.BufferManager.AddLocal(XmlObject) == true)
                       ReturnObject = Protocol.StandardAnsware.Ok;
@@ -957,7 +940,7 @@ namespace NetworkManager
       {
         return NotifyToNode(Message.ToString(), Obj, ToNode);
       }
-      internal enum StandardMessages { NetworkNodes, ImOnline, ImOffline, TestSpeed, AddToBuffer, Connect, GetStats }
+      internal enum StandardMessages { NetworkNodes, ImOnline, ImOffline, TestSpeed, AddToBuffer, SendElementsToNode, GetStats }
       public enum StandardAnsware { Ok, Error, DuplicateIP, TooSlow, Failure, NoAnsware, Declined }
       internal static List<Node> GetNetworkNodes()
       {
@@ -984,7 +967,7 @@ namespace NetworkManager
         }
         if (MyNode != null)
         {
-          MappingNetwork.SetNodeGroups(NodeList);
+          MappingNetwork.SetNodeNetwork();
           MappingNetwork.SetNetworkSyncTimeSpan(NetworkLatency);
         }
         return NodeList;
@@ -1074,11 +1057,11 @@ namespace NetworkManager
         }
       }
       private static Dictionary<Node, int> FailureList = new Dictionary<Node, int>();
-      internal static void ConnectToNode(Node Node)
+      internal static void SendElementsToNode(List<BufferManager.ObjToNode> Elements, Node Node)
       {
         new System.Threading.Thread(() =>
         {
-          var XmlResult = SendRequest(StandardMessages.Connect, null, Node);
+          var XmlResult = SendRequest(StandardMessages.SendElementsToNode, Elements, Node);
           if (string.IsNullOrEmpty(XmlResult))
           {
             //the node is disconnected
@@ -1103,7 +1086,7 @@ namespace NetworkManager
                   }
                 }
                 if (Attempts < 3)
-                  ConnectToNode(Node);
+                  SendElementsToNode(Elements, Node);
               }
               else
                 OnlineDetection.WaitForInternetConnection();
