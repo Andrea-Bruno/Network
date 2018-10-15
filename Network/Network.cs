@@ -14,9 +14,9 @@ namespace NetworkManager
     /// You can join the network as a node, and contribute to decentralization, or hook yourself to the network as an external user.
     /// To create a node, set the MyAddress parameter with your web address.If MyAddress is not set then you are an external user.
     /// </summary>
-    /// <param name="MyAddress">Your web address. If you do not want to create the node, omit this parameter</param>
-    /// <param name="EntryPoints">The list of permanent access points nodes, to access the network. If null then the entry points will be those set in the NetworkManager.Setup</param>
+    /// <param name="EntryPoints">The list of permanent access points nodes, to access the network</param>
     /// <param name="NetworkName">The name of the infrastructure. For tests we recommend using "testnet"</param>
+    /// <param name="MyAddress">Your web address. If you do not want to create the node, omit this parameter</param>
     public Network(Node[] EntryPoints, string NetworkName = "testnet", string MyAddress = null)
     {
       Comunication = new ComunicationClass(NetworkName, null);
@@ -50,7 +50,7 @@ namespace NetworkManager
       {
         if (!string.IsNullOrEmpty(MyAddress))
         {
-          MyNode = new Node { MachineName = MachineName, Address = _MyAddress };
+          MyNode = new Node(MachineName, _MyAddress);
           var Stats1 = Protocol.GetStats(GetRandomNode());
           var Stats2 = Protocol.GetStats(GetRandomNode());
           NetworkLatency = Math.Max(Stats1.NetworkLatency, Stats2.NetworkLatency);
@@ -69,7 +69,6 @@ namespace NetworkManager
       }
 
     }
-
     private static List<Network> Networks = new List<Network>();
     //==== REMOVE THE TEST IN THE FINAL VERSION
     public void Test()
@@ -96,7 +95,7 @@ namespace NetworkManager
     public string MyAddress { get { return _MyAddress; } }
     private string _NetworkName;
     public string NetworkName { get { return _NetworkName; } }
-    public string MachineName { get { return Environment.MachineName; } }
+    public static string MachineName { get { return Environment.MachineName; } }
     private string _MasterServerMachineName;
     public string MasterServerMachineName { get { return _MasterServerMachineName; } }
     private static bool _IsOnline;
@@ -107,16 +106,43 @@ namespace NetworkManager
     }
     public class Node
     {
+      public Node() { }
+      /// <summary>
+      /// Used only to create MyNode. Generate an RSA for the current node.
+      /// </summary>
+      /// <param name="MachineName">Name of this Machine</param>
+      /// <param name="Address">Address of this node</param>
+      internal Node(string MachineName, string Address)
+      {
+        this.MachineName = MachineName;
+        this.Address = Address;
+        //Create RSA
+        var RSA = new System.Security.Cryptography.RSACryptoServiceProvider();
+        var PublicKeyBase64 = Convert.ToBase64String(RSA.ExportCspBlob(false));
+        _RSA = RSA;
+
+      }
       public string Address;
       public string MachineName;
       public string PublicKey;
-      public string IP;
+      private System.Security.Cryptography.RSACryptoServiceProvider _RSA;
+      public System.Security.Cryptography.RSACryptoServiceProvider RSA
+      {
+        get
+        {
+          if (_RSA == null)
+            _RSA = new System.Security.Cryptography.RSACryptoServiceProvider();
+          _RSA.ImportCspBlob(Convert.FromBase64String(PublicKey));
+          return _RSA;
+        }
+      }
+      public uint IP;
       public void DetectIP()
       {
         try
         {
           var ips = System.Net.Dns.GetHostAddresses(new Uri(Address).Host);
-          IP = ips.Last().ToString();
+          IP = Converter.IpToUint(ips.Last().ToString());
         }
         catch (Exception)
         {
@@ -228,6 +254,15 @@ namespace NetworkManager
       /// <returns>The list of nodes connected to the level</returns>
       internal List<Node> GetConnections(int Level)
       {
+        return GetConnections(Level, MyX, MyY);
+      }
+      internal List<Node> GetConnections(int Level, Node Node)
+      {
+        GetXY(Node, out int X, out int Y);
+        return GetConnections(Level, X, Y);
+      }
+      private List<Node> GetConnections(int Level, int XNode, int YNode)
+      {
         int Distance = SquareSide / (int)Math.Pow(3, Level);
         if (Distance < 1)
           Distance = 1;
@@ -240,9 +275,9 @@ namespace NetworkManager
             for (int LeftRight = -1; LeftRight <= 1; LeftRight++)
               if (LeftRight != 0 || UpDown != 0)
               {
-                var X = MyX + Distance * LeftRight;
-                var Y = MyY + Distance * UpDown;
-                if (X != MyX && Y != MyY)
+                var X = XNode + Distance * LeftRight;
+                var Y = YNode + Distance * UpDown;
+                if (X != XNode && Y != YNode)
                 {
                   var Connection = GetNodeAtPosition(X, Y);
                   if (!List.Contains(Connection))
@@ -253,7 +288,6 @@ namespace NetworkManager
           return List;
         }
       }
-
     }
     /// <summary>
     /// The buffer is a mechanism that allows you to distribute objects on the network by assigning a timestamp.
@@ -290,16 +324,12 @@ namespace NetworkManager
           SpoolerTimer.Elapsed += (sender, e) => DataDelivery();
         }
         private Network Network;
-        private BufferManagerClass BufferManager;
-        private MappingNetworkClass MappingNetwork;
-        private int SpoolerTimeMs = 1000;
-        private int PauseBetweenTransmissionOnTheNode = 2000;
+        private readonly BufferManagerClass BufferManager;
+        private readonly MappingNetworkClass MappingNetwork;
+        private readonly int SpoolerTimeMs = 1000;
+        private readonly int PauseBetweenTransmissionOnTheNode = 2000;
         private Dictionary<Node, DateTime> LastTransmission = new Dictionary<Node, DateTime>();
         private System.Timers.Timer SpoolerTimer;
-        //internal void DataDelivery()
-        //{
-        //  DataDelivery(null, null, this);
-        //}
         internal void DataDelivery()
         {
           var DataToNode = new Dictionary<Node, List<BufferManagerClass.ObjToNode>>();
@@ -316,8 +346,7 @@ namespace NetworkManager
                           MillisecondsFromLastTransmission = (int)(DateTime.UtcNow - TrasmissionTime).TotalMilliseconds;
                       if (MillisecondsFromLastTransmission > PauseBetweenTransmissionOnTheNode)
                       {
-                        List<BufferManagerClass.ObjToNode> ToSendToNode;
-                        if (!DataToNode.TryGetValue(Node, out ToSendToNode))
+                        if (!DataToNode.TryGetValue(Node, out List<ObjToNode> ToSendToNode))
                         {
                           ToSendToNode = new List<BufferManagerClass.ObjToNode>();
                           DataToNode.Add(Node, ToSendToNode);
@@ -342,7 +371,6 @@ namespace NetworkManager
         }
       }
 
-
       /// <summary>
       /// Send an object to the network to be inserted in the shared buffer
       /// </summary>
@@ -362,10 +390,10 @@ namespace NetworkManager
           var ThisTime = Now();
           foreach (var item in Buffer)
           {
-            if ((ThisTime - item.Timestamp) > Network.MappingNetwork.NetworkSyncTimeSpan)
+            if ((ThisTime - new DateTime(item.Timestamp)) > Network.MappingNetwork.NetworkSyncTimeSpan)
             {
               ToRemove.Add(item);
-              var ObjectName = GetObjectName(item.XmlObject);
+              var ObjectName = Utility.GetObjectName(item.XmlObject);
               if (BufferCompletedAction.TryGetValue(ObjectName, out SyncData Action))
                 Action.Invoke(item.XmlObject, item.Timestamp);
               //foreach (SyncData Action in BufferCompletedAction)
@@ -390,7 +418,7 @@ namespace NetworkManager
           return false;
         else
         {
-          DateTime Timestamp = Now();
+          long Timestamp = Now().Ticks;
           var Element = new Element() { Timestamp = Timestamp, XmlObject = XmlObject };
           lock (Buffer)
           {
@@ -405,19 +433,24 @@ namespace NetworkManager
       }
 
       /// <summary>
+      /// In this waiting list all the objects awaiting the timestamp signature are inserted by all the nodes assigned to the first level distribution
+      /// </summary>
+      private readonly List<ObjToNode> StandByList = new List<ObjToNode>();
+      /// <summary>
       /// Insert the objects in the local buffer to be synchronized
       /// The elements come from other nodes
       /// </summary>
       /// <param name="Elements">Elements come from other nodes</param>
-      internal void AddLocalFromNode(List<ObjToNode> Elements)
+      internal ObjToNode.TimestampVector AddLocalFromNode(List<ObjToNode> Elements, Node FromNode)
       {
+        ObjToNode.TimestampVector Result = null;
         lock (Buffer)
         {
           var Count = Buffer.Count();
           var ThisTime = Now();
           foreach (var ObjToNode in Elements)
           {
-            var TimePassedFromInsertion = ThisTime - ObjToNode.Timestamp;
+            var TimePassedFromInsertion = ThisTime - new DateTime(ObjToNode.Timestamp);
             UpdateStats(TimePassedFromInsertion);
             if ((TimePassedFromInsertion) <= Network.MappingNetwork.NetworkSyncTimeSpan)
             {
@@ -426,12 +459,30 @@ namespace NetworkManager
               if (ElementBuffer == null)
               {
                 UpdateStats(TimePassedFromInsertion, true);
-                ElementBuffer = (ElementBuffer)(Element)ObjToNode;
-                Buffer.Add(ElementBuffer);
+                if (ObjToNode.Level == 1)
+                {
+                  // This is an object that is just inserted, so you must certify the timestamp and send the certificate to the node that took delivery of the object.
+                  // The object must then be put on standby until the node sends all the certificates for the timestamp.
+                  if (ObjToNode.CheckNodeThatStartedDistributingTheObject(FromNode))
+                  {
+                    var Signature = ObjToNode.CreateTheDignatureForTheTimestamp(Network.MyNode);
+                    StandByList.Add(ObjToNode);
+                    if (Result == null)
+                      Result = new ObjToNode.TimestampVector();
+                    Result.SignedTimestamp.Add(ObjToNode.ShortHash, Signature);
+                  }
+                }
+                else
+                {
+                  ElementBuffer = (ElementBuffer)(Element)ObjToNode;
+                  Buffer.Add(ElementBuffer);
+                }
               }
               lock (ElementBuffer.Levels)
                 if (!ElementBuffer.Levels.Contains(Level))
                   ElementBuffer.Levels.Add(Level);
+              lock (ElementBuffer.SendedNode)
+                ElementBuffer.SendedNode.Add(FromNode);
               ElementBuffer.Received++;
             }
             else
@@ -441,6 +492,25 @@ namespace NetworkManager
               Stats12h.ElementsArrivedOutOfTime++;
             }
           }
+          if (Count != Buffer.Count())
+          {
+            SortBuffer();
+            Spooler.DataDelivery();
+          }
+        }
+        return Result;
+      }
+      internal void UnlockElementsInStandBy(ObjToNode.TimestampVector SignedTimestamps, Node FromNode)
+      {
+        lock (Buffer)
+        {
+          var Count = Buffer.Count();
+          foreach (var ObjToNode in StandByList)
+            if (SignedTimestamps.SignedTimestamp.TryGetValue(ObjToNode.ShortHash, out string Signatures))
+            {
+              ObjToNode.SignedTimestamp = Signatures;
+              Buffer.Add((ElementBuffer)(Element)ObjToNode);
+            }
           if (Count != Buffer.Count())
           {
             SortBuffer();
@@ -495,14 +565,127 @@ namespace NetworkManager
       }
       public class Element
       {
-        public DateTime Timestamp;
+        public long Timestamp;
         public string XmlObject;
       }
       public class ObjToNode : Element
       {
         public int Level;
+        public string SignedTimestamp;
+        /// <summary>
+        /// Class used exclusively to transmit the timestamp certificates to the node who sent the object to be signed
+        /// </summary>
+        public class TimestampVector
+        {
+          // "int" is the short hash of ObjToNode and "string" is the SignedTimestamp for the single ObjToNode
+          public Dictionary<int, string> SignedTimestamp = new Dictionary<int, string>();
+        }
+        internal int ShortHash;
+        private byte[] Hash()
+        {
+          var Data = BitConverter.GetBytes(Timestamp).Concat(Converter.StringToByteArray(XmlObject)).ToArray();
+          System.Security.Cryptography.HashAlgorithm hashType = new System.Security.Cryptography.SHA256Managed();
+          byte[] hashBytes = hashType.ComputeHash(Data);
+          ShortHash = hashBytes.GetHashCode();
+          return hashBytes;
+        }
+        /// <summary>
+        /// Check the node that sent this object, have assigned a correct timestamp, if so it generates its own signature.
+        /// </summary>
+        /// <param name="MyNode">Your own Node</param>
+        /// <returns>Returns the signature if the timestamp assigned by the node is correct, otherwise null</returns>
+        internal string CreateTheDignatureForTheTimestamp(Node MyNode)
+        {
+          var IpNode = BitConverter.GetBytes(MyNode.IP);
+          var ThisMoment = Now();
+          var DT = new DateTime(Timestamp);
+          var Margin = 0.5; // Calculates a margin because the clocks on the nodes may not be perfectly synchronized
+          if (ThisMoment >= DT.AddSeconds(-Margin))
+          {
+            var MaximumTimeToTransmitTheDataOnTheNode = 2; // In seconds
+            if (ThisMoment <= DT.AddSeconds(MaximumTimeToTransmitTheDataOnTheNode + Margin))
+            {
+              // Ok, I can certify the date and time
+              var SignedTimestamp = MyNode.RSA.SignHash(Hash(), System.Security.Cryptography.CryptoConfig.MapNameToOID("SHA256"));
+              return Convert.ToBase64String(IpNode.Concat(SignedTimestamp).ToArray());
+            }
+          }
+          return null;
+        }
+        internal enum CheckSignedTimestampResult { Ok, NodeThatPutTheSignatureNotFound, InvalidSignature, NonCompliantNetworkConfiguration }
+        /// <summary>
+        /// Check if all the nodes responsible for distributing this data have put their signature on the timestamp
+        /// </summary>
+        /// <param name="Network"></param>
+        /// <param name="CurrentNodeList"></param>
+        /// <param name="NodesRemoved"></param>
+        /// <returns>Result of the operation</returns>
+        internal CheckSignedTimestampResult CheckSignedTimestamp(Network Network, List<Node> CurrentNodeList, List<Node> NodesRemoved)
+        {
+          var LenT = 30;
+          var SignedTimestamps = Convert.FromBase64String(SignedTimestamp);
+          var TS = new List<Byte[]>();
+          Node FirstNode = null;
+          var Nodes = new List<Node>();
+          do
+          {
+            var Timestamp = SignedTimestamps.Take(LenT).ToArray();
+            TS.Add(Timestamp);
+            SignedTimestamps = SignedTimestamps.Skip(LenT).ToArray();
+          } while (SignedTimestamps.Count() != 0);
+          byte[] HashBytes = Hash();
+          foreach (var SignedTS in TS)
+          {
+            ReadSignedTimespan(SignedTS, out uint IpNode, out byte[] Signature);
+            var Node = CurrentNodeList.Find((x) => x.IP == IpNode);
+            if (Node == null)
+              Node = NodesRemoved.Find((x) => x.IP == IpNode);
+            if (FirstNode == null)
+              FirstNode = Node;
+            if (Node == null)
+            {
+              return CheckSignedTimestampResult.NodeThatPutTheSignatureNotFound;
+            }
+            else
+            {
+              Nodes.Add(Node);
+              if (!Node.RSA.VerifyHash(HashBytes, System.Security.Cryptography.CryptoConfig.MapNameToOID("SHA256"), Signature))
+              {
+                return CheckSignedTimestampResult.InvalidSignature;
+              }
+            }
+          }
+          var Connections = Network.MappingNetwork.GetConnections(1, FirstNode);
+          if (Connections.Count != Nodes.Count)
+            return CheckSignedTimestampResult.NonCompliantNetworkConfiguration;
+          else
+          {
+            foreach (var item in Connections)
+            {
+              if (!Nodes.Contains(item))
+              {
+                return CheckSignedTimestampResult.NonCompliantNetworkConfiguration;
+              }
+            }
+          }
+          return CheckSignedTimestampResult.Ok;
+        }
+        internal bool CheckNodeThatStartedDistributingTheObject(Node FromNode)
+        {
+          ReadSignedTimespan(Convert.FromBase64String(SignedTimestamp), out uint IpNode, out byte[] Signature);
+          if (FromNode.IP != IpNode)
+            return false;
+          if (!FromNode.RSA.VerifyHash(Hash(), System.Security.Cryptography.CryptoConfig.MapNameToOID("SHA256"), Signature))
+            return false;
+          return true;
+        }
+        private static void ReadSignedTimespan(byte[] SignedTimestamp, out uint IpNode, out byte[] Signature)
+        {
+          IpNode = BitConverter.ToUInt32(SignedTimestamp, 0);
+          Signature = SignedTimestamp.Skip(4).ToArray();
+        }
       }
-      public delegate void SyncData(string XmlObject, DateTime Timestamp);
+      public delegate void SyncData(string XmlObject, long Timestamp);
       /// <summary>
       /// Add a action used to local sync the objects in the buffer
       /// </summary>
@@ -516,187 +699,165 @@ namespace NetworkManager
         return true;
       }
       private Dictionary<string, SyncData> BufferCompletedAction = new Dictionary<string, SyncData>();
-      static private string GetObjectName(string XmlObject)
-      {
-        if (!string.IsNullOrEmpty(XmlObject))
-        {
-          var p1 = XmlObject.IndexOf('>');
-          if (p1 != -1)
-          {
-            var p2 = XmlObject.IndexOf('<', p1);
-            if (p2 != -1)
-            {
-              var p3 = XmlObject.IndexOf('>', p2);
-              if (p3 != -1)
-              {
-                return XmlObject.Substring(p2 + 1, p3 - p2 - 1);
-              }
-            }
-          }
-        }
-        return null;
-      }
     }
 
     public static bool OnReceivesHttpRequest(System.Collections.Specialized.NameValueCollection QueryString, System.Collections.Specialized.NameValueCollection Form, string FromIP, out string ContentType, System.IO.Stream OutputStream)
     {
       ContentType = null;
+      var NetworkName = QueryString["network"];
       foreach (var Network in Networks)
       {
-        if (Network._OnReceivesHttpRequest(QueryString, Form, FromIP, out ContentType, OutputStream))
-          return true;
+        if (NetworkName == Network.NetworkName)
+          if (Network._OnReceivesHttpRequest(QueryString, Form, FromIP, out ContentType, OutputStream))
+            return true;
       }
       return false;
     }
-
     private bool _OnReceivesHttpRequest(System.Collections.Specialized.NameValueCollection QueryString, System.Collections.Specialized.NameValueCollection Form, string FromIP, out string ContentType, System.IO.Stream OutputStream)
     {
-      //Setting = CurrentSetting();
-      //Response.Cache.SetCacheability(System.Web.HttpCacheability.NoCache);
+      var AppName = QueryString["app"];
+      var ToUser = QueryString["touser"];
+      var FromUser = QueryString["fromuser"];
+      var Post = QueryString["post"];
+      var Request = QueryString["request"];
+      int.TryParse(QueryString["sectimeout"], out int SecTimeout);
+      int.TryParse(QueryString["secwaitanswer"], out int SecWaitAnswer);
 
-      var NetworkName = QueryString["network"];
-      //QueryString.TryGetValue("network", out string NetworkName);
+      string XmlObject = null;
+      if (Form["object"] != null)
+        XmlObject = Converter.Base64ToString(Form["object"]);
 
-      if (this.NetworkName == NetworkName)
+      if (ToUser == MachineName || ToUser.StartsWith(MachineName + "."))
       {
-        var AppName = QueryString["app"];
-        var ToUser = QueryString["touser"];
-        var FromUser = QueryString["fromuser"];
-        var Post = QueryString["post"];
-        var Request = QueryString["request"];
-        int.TryParse(QueryString["sectimeout"], out int SecTimeout);
-        int.TryParse(QueryString["secwaitanswer"], out int SecWaitAnswer);
-
-        string XmlObject = null;
-        if (Form["object"] != null)
-          XmlObject = Converter.Base64ToString(Form["object"]);
-
-        if (ToUser == MachineName || ToUser.StartsWith(MachineName + "."))
+        var Parts = ToUser.Split('.'); // [0]=MachineName, [1]=PluginName
+        string PluginName = null;
+        if (Parts.Length > 1)
         {
-          var Parts = ToUser.Split('.'); // [0]=MachineName, [1]=PluginName
-          string PluginName = null;
-          if (Parts.Length > 1)
+          PluginName = Parts[1];
+        }
+        object ReturnObject = null;
+        try
+        {
+          if (!string.IsNullOrEmpty(PluginName))
           {
-            PluginName = Parts[1];
+            //foreach (PluginManager.Plugin Plugin in AllPlugins())
+            //{
+            //  if (Plugin.IsEnabled(Setting))
+            //  {
+            //    if (Plugin.Name == PluginName)
+            //    {
+            //      Plugin.PushObject(Post, XmlObject, Form, ReturnObject);
+            //      break;
+            //    }
+            //  }
+            //}
           }
-          object ReturnObject = null;
-          try
+          else
           {
-            if (!string.IsNullOrEmpty(PluginName))
+            if (!string.IsNullOrEmpty(Post))//Post is a GetType Name
             {
-              //foreach (PluginManager.Plugin Plugin in AllPlugins())
-              //{
-              //  if (Plugin.IsEnabled(Setting))
-              //  {
-              //    if (Plugin.Name == PluginName)
-              //    {
-              //      Plugin.PushObject(Post, XmlObject, Form, ReturnObject);
-              //      break;
-              //    }
-              //  }
-              //}
+              //Is a object trasmission
+              if (string.IsNullOrEmpty(FromUser))
+                ReturnObject = "error: no server name setting";
+              else if (Protocol.OnReceivingObjectsActions.ContainsKey(Post))
+                ReturnObject = Protocol.OnReceivingObjectsActions[Post](XmlObject);
             }
-            else
+            if (!string.IsNullOrEmpty(Request))
+            //Is a request o object
             {
-              if (!string.IsNullOrEmpty(Post))//Post is a GetType Name
+              if (Protocol.OnRequestActions.ContainsKey(Request))
+                ReturnObject = Protocol.OnRequestActions[Request](XmlObject);
+              if (ProtocolClass.StandardMessages.TryParse(Request, out ProtocolClass.StandardMessages Rq))
               {
-                //Is a object trasmission
-                if (string.IsNullOrEmpty(FromUser))
-                  ReturnObject = "error: no server name setting";
-                else if (Protocol.OnReceivingObjectsActions.ContainsKey(Post))
-                  ReturnObject = Protocol.OnReceivingObjectsActions[Post](XmlObject);
-              }
-              if (!string.IsNullOrEmpty(Request))
-              //Is a request o object
-              {
-                if (Protocol.OnRequestActions.ContainsKey(Request))
-                  ReturnObject = Protocol.OnRequestActions[Request](XmlObject);
-
-                if (ProtocolClass.StandardMessages.TryParse(Request, out ProtocolClass.StandardMessages Rq))
+                if (Rq == ProtocolClass.StandardMessages.NetworkNodes)
+                  ReturnObject = NodeList;
+                else if (Rq == ProtocolClass.StandardMessages.GetStats)
                 {
-                  if (Rq == ProtocolClass.StandardMessages.NetworkNodes)
-                    ReturnObject = NodeList;
-                  else if (Rq == ProtocolClass.StandardMessages.GetStats)
+                  ReturnObject = new ProtocolClass.Stats { NetworkLatency = (int)BufferManager.Stats24h.NetworkLatency.TotalMilliseconds };
+                }
+                else if (Rq == ProtocolClass.StandardMessages.SendElementsToNode)
+                  if (Converter.XmlToObject(XmlObject, typeof(List<BufferManagerClass.ObjToNode>), out object ObjElements))
                   {
-                    ReturnObject = new ProtocolClass.Stats { NetworkLatency = (int)BufferManager.Stats24h.NetworkLatency.TotalMilliseconds };
-                  }
-                  else if (Rq == ProtocolClass.StandardMessages.SendElementsToNode)
-                    if (Converter.XmlToObject(XmlObject, typeof(List<BufferManagerClass.ObjToNode>), out object ObjElements))
+                    var UintFromIP = Converter.IpToUint(FromIP);
+                    var FromNode = NodeList.Find((x) => x.IP == UintFromIP);
+                    if (FromNode != null)
                     {
-                      BufferManager.AddLocalFromNode((List<BufferManagerClass.ObjToNode>)ObjElements);
-                      ReturnObject = ProtocolClass.StandardAnsware.Ok;
+                      ReturnObject = BufferManager.AddLocalFromNode((List<BufferManagerClass.ObjToNode>)ObjElements, FromNode);
+                      if (ReturnObject == null)
+                        ReturnObject = ProtocolClass.StandardAnsware.Ok;
                     }
-                    else
-                      ReturnObject = ProtocolClass.StandardAnsware.Error;
-                  else if (Rq == ProtocolClass.StandardMessages.AddToBuffer)
-                    if (BufferManager.AddLocal(XmlObject) == true)
-                      ReturnObject = ProtocolClass.StandardAnsware.Ok;
-                    else
-                      ReturnObject = ProtocolClass.StandardAnsware.Error;
-                  else if (Rq == ProtocolClass.StandardMessages.ImOffline || Rq == ProtocolClass.StandardMessages.ImOnline)
-                    if (Converter.XmlToObject(XmlObject, typeof(Node), out object ObjNode))
+                  }
+                  else
+                    ReturnObject = ProtocolClass.StandardAnsware.Error;
+                else if (Rq == ProtocolClass.StandardMessages.AddToBuffer)
+                  if (BufferManager.AddLocal(XmlObject) == true)
+                    ReturnObject = ProtocolClass.StandardAnsware.Ok;
+                  else
+                    ReturnObject = ProtocolClass.StandardAnsware.Error;
+                else if (Rq == ProtocolClass.StandardMessages.ImOffline || Rq == ProtocolClass.StandardMessages.ImOnline)
+                  if (Converter.XmlToObject(XmlObject, typeof(Node), out object ObjNode))
+                  {
+                    var Node = (Node)ObjNode;
+                    ReturnObject = ProtocolClass.StandardAnsware.Ok;
+                    if (Rq == ProtocolClass.StandardMessages.ImOnline)
                     {
-                      var Node = (Node)ObjNode;
-                      ReturnObject = ProtocolClass.StandardAnsware.Ok;
-                      if (Rq == ProtocolClass.StandardMessages.ImOnline)
+                      Node.DetectIP();
+                      if (NodeList.Select(x => x.IP == Node.IP && Node.IP != Converter.IpToUint("127.0.0.1")) != null)
+                        ReturnObject = ProtocolClass.StandardAnsware.DuplicateIP;
+                      else
                       {
-                        Node.DetectIP();
-                        if (Node.IP != "127.0.0.1" && NodeList.Select(x => x.IP == Node.IP) != null)
-                          ReturnObject = ProtocolClass.StandardAnsware.DuplicateIP;
+                        if (Protocol.SpeedTest(Node))
+                          lock (NodeList)
+                          {
+                            NodeList.Add(Node);
+                            NodeList = NodeList.OrderBy(o => o.Address).ToList();
+                          }
                         else
-                        {
-                          if (Protocol.SpeedTest(Node))
-                            lock (NodeList)
-                            {
-                              NodeList.Add(Node);
-                              NodeList = NodeList.OrderBy(o => o.Address).ToList();
-                            }
-                          else
-                            ReturnObject = ProtocolClass.StandardAnsware.TooSlow;
-                        }
+                          ReturnObject = ProtocolClass.StandardAnsware.TooSlow;
                       }
                     }
-                    else
-                      ReturnObject = ProtocolClass.StandardAnsware.Error;
-                  else if (Rq == ProtocolClass.StandardMessages.TestSpeed)
-                    ReturnObject = new string('x', 1048576);
-                  ContentType = "text/xml;charset=utf-8";
-                  XmlSerializer xml = new XmlSerializer(ReturnObject.GetType());
-                  XmlSerializerNamespaces xmlns = new XmlSerializerNamespaces();
-                  xmlns.Add(string.Empty, string.Empty);
-                  xml.Serialize(OutputStream, ReturnObject, xmlns);
-                  return true;
-                }
+                  }
+                  else
+                    ReturnObject = ProtocolClass.StandardAnsware.Error;
+                else if (Rq == ProtocolClass.StandardMessages.TestSpeed)
+                  ReturnObject = new string('x', 1048576);
+                ContentType = "text/xml;charset=utf-8";
+                XmlSerializer xml = new XmlSerializer(ReturnObject.GetType());
+                XmlSerializerNamespaces xmlns = new XmlSerializerNamespaces();
+                xmlns.Add(string.Empty, string.Empty);
+                xml.Serialize(OutputStream, ReturnObject, xmlns);
+                return true;
               }
             }
           }
-          catch (Exception ex)
-          {
-            ReturnObject = ex.Message;
-          }
-          if (ReturnObject != null && string.IsNullOrEmpty(Request))
-          {
-            var Vector = new ComunicationClass.ObjectVector(ToUser, ReturnObject);
-            ContentType = "text/xml;charset=utf-8";
-            XmlSerializer xml = new XmlSerializer(typeof(ComunicationClass.ObjectVector));
-            XmlSerializerNamespaces xmlns = new XmlSerializerNamespaces();
-            xmlns.Add(string.Empty, string.Empty);
-            xml.Serialize(OutputStream, Vector, xmlns);
-            return true;
-          }
         }
-        //if (Post != "")
-        //  var se = new SpolerElement(AppName, FromUser, ToUser, QueryString("post"), XmlObject, SecTimeout);
-
-        //if (string.IsNullOrEmpty(Request))
-        //  SendObject(AppName, FromUser, ToUser, SecWaitAnswer);
-        //else
-        //  switch (Request)
-        //  {
-        //    default:
-        //      break;
-        //  }
+        catch (Exception ex)
+        {
+          ReturnObject = ex.Message;
+        }
+        if (ReturnObject != null && string.IsNullOrEmpty(Request))
+        {
+          var Vector = new ComunicationClass.ObjectVector(ToUser, ReturnObject);
+          ContentType = "text/xml;charset=utf-8";
+          XmlSerializer xml = new XmlSerializer(typeof(ComunicationClass.ObjectVector));
+          XmlSerializerNamespaces xmlns = new XmlSerializerNamespaces();
+          xmlns.Add(string.Empty, string.Empty);
+          xml.Serialize(OutputStream, Vector, xmlns);
+          return true;
+        }
       }
+      //if (Post != "")
+      //  var se = new SpolerElement(AppName, FromUser, ToUser, QueryString("post"), XmlObject, SecTimeout);
+
+      //if (string.IsNullOrEmpty(Request))
+      //  SendObject(AppName, FromUser, ToUser, SecWaitAnswer);
+      //else
+      //  switch (Request)
+      //  {
+      //    default:
+      //      break;
+      //  }
+
       ContentType = null;
       return false;
     }
@@ -1151,48 +1312,32 @@ namespace NetworkManager
           return StandardAnsware.Error;
         }
       }
-      private Dictionary<Node, int> FailureList = new Dictionary<Node, int>();
       internal void SendElementsToNode(List<BufferManagerClass.ObjToNode> Elements, Node ToNode)
       {
         new System.Threading.Thread(() =>
         {
-          var XmlResult = SendRequest(ToNode, StandardMessages.SendElementsToNode, Elements);
-          if (string.IsNullOrEmpty(XmlResult))
+          string XmlResult = null;
+          int Attempts = 0;
+          do
           {
-            //the node is disconnected
+            Attempts += 1;
+            //Verify if the node is disconnected
             if (Network.NodeList.Contains(ToNode))
             {
-              //try reconnect
-              if (OnlineDetection.CheckImOnline())
+              XmlResult = SendRequest(ToNode, StandardMessages.SendElementsToNode, Elements);
+              if (Utility.GetObjectName(XmlResult) == "TimestampVector")
               {
-                int Attempts;
-                lock (FailureList)
+                //ObjToNode.TimestampVector
+                //var Obj   Converter.XmlToObject(XmlResult, )
+                if (Converter.XmlToObject(XmlResult, typeof(BufferManagerClass.ObjToNode.TimestampVector), out object ObjTimestampVector))
                 {
-                  if (FailureList.TryGetValue(ToNode, out Attempts))
-                  {
-                    FailureList.Remove(ToNode);
-                    Attempts += 1;
-                    FailureList.Add(ToNode, Attempts);
-                  }
-                  else
-                  {
-                    Attempts = 1;
-                    FailureList.Add(ToNode, 1);
-                  }
+                  var TimestampVector = (BufferManagerClass.ObjToNode.TimestampVector)ObjTimestampVector;
                 }
-                if (Attempts < 3)
-                  SendElementsToNode(Elements, ToNode);
               }
-              else
-                OnlineDetection.WaitForInternetConnection();
             }
-          }
-          else
-          {
-            lock (FailureList)
-              if (FailureList.ContainsKey(ToNode))
-                FailureList.Remove(ToNode);
-          }
+          } while (string.IsNullOrEmpty(XmlResult) && Attempts < 3);
+          if (string.IsNullOrEmpty(XmlResult))
+            OnlineDetection.WaitForInternetConnection();
         }).Start();
       }
     }
