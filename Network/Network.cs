@@ -31,7 +31,7 @@ namespace NetworkManager
       //Setup.Network.NetworkName = NetworkName;
       //if (EntryPoints != null)
       //  Setup.Network.EntryPoints = EntryPoints;
-      OnlineDetection.WaitForInternetConnection();
+      ProtocolClass.OnlineDetection.WaitForInternetConnection();
     }
     internal void Start()
     {
@@ -268,7 +268,7 @@ namespace NetworkManager
           Distance = 1;
         lock (CacheConnections)
         {
-          if (CacheConnections.TryGetValue(Distance, out List<Node> List))
+          if (XNode == MyX && YNode == MyY && CacheConnections.TryGetValue(Distance, out List<Node> List))
             return List;
           List = new List<Node>();
           for (int UpDown = -1; UpDown <= 1; UpDown++)
@@ -284,7 +284,8 @@ namespace NetworkManager
                     List.Add(Connection);
                 }
               }
-          CacheConnections.Add(Distance, List);
+          if (XNode == MyX && YNode == MyY)
+            CacheConnections.Add(Distance, List);
           return List;
         }
       }
@@ -328,23 +329,39 @@ namespace NetworkManager
         private readonly MappingNetworkClass MappingNetwork;
         private readonly int SpoolerTimeMs = 1000;
         private readonly int PauseBetweenTransmissionOnTheNode = 2000;
-        private Dictionary<Node, DateTime> LastTransmission = new Dictionary<Node, DateTime>();
+        /// <summary>
+        /// Memorize when the last communication was made at a certain level
+        /// </summary>
+        private Dictionary<int, DateTime> LastTransmission = new Dictionary<int, DateTime>();
         private System.Timers.Timer SpoolerTimer;
         internal void DataDelivery()
         {
+          List<Node> Level0Connections = null;//The transmissions at this level will receive the signature of the timestamp from the node that receives them, these signatures once received all must be sent to every single node of this level
           var DataToNode = new Dictionary<Node, List<BufferManagerClass.ObjToNode>>();
+          var Levels = new List<int>();
+          Levels.Sort();
           lock (Network.BufferManager.Buffer)
             foreach (var Data in Network.BufferManager.Buffer)
-              lock (Data.Levels)
-                foreach (var Level in Data.Levels)
-                  foreach (var Node in Network.MappingNetwork.GetConnections(Level))
-                    if (!Data.SendedNode.Contains(Node))
-                    {
-                      var MillisecondsFromLastTransmission = int.MaxValue;
-                      lock (LastTransmission)
-                        if (LastTransmission.TryGetValue(Node, out DateTime TrasmissionTime))
-                          MillisecondsFromLastTransmission = (int)(DateTime.UtcNow - TrasmissionTime).TotalMilliseconds;
-                      if (MillisecondsFromLastTransmission > PauseBetweenTransmissionOnTheNode)
+            {
+              Levels.AddRange(Data.Levels.FindAll(x => !Levels.Contains(x)));
+            }
+          foreach (var Level in Levels)
+          {
+            var MsFromLastTransmissionAtThisLevel = int.MaxValue;
+            lock (LastTransmission)
+              if (LastTransmission.TryGetValue(Level, out DateTime TrasmissionTime))
+                MsFromLastTransmissionAtThisLevel = (int)(DateTime.UtcNow - TrasmissionTime).TotalMilliseconds;
+            if (MsFromLastTransmissionAtThisLevel > PauseBetweenTransmissionOnTheNode)
+            {
+              var Connections = Network.MappingNetwork.GetConnections(Level);
+              if (Level == 0)
+                Level0Connections = Connections;
+              lock (Network.BufferManager.Buffer)
+                foreach (var Data in Network.BufferManager.Buffer)
+                  if (Data.Levels.Contains(Level))
+                  {
+                    foreach (var Node in Connections)
+                      if (!Data.SendedNode.Contains(Node))
                       {
                         if (!DataToNode.TryGetValue(Node, out List<ObjToNode> ToSendToNode))
                         {
@@ -354,19 +371,34 @@ namespace NetworkManager
                         var Element = (BufferManagerClass.Element)Data;
                         var ElementToNode = (BufferManagerClass.ObjToNode)Element;
                         ElementToNode.Level = Level;
+                        if (Level == 0)
+                        {
+                          // We assign the timestamp and sign it
+                          // The nodes of level 1 that will receive this element, will verify the timestamp and if congruous they sign it and return the signature in response to the forwarding.
+                          ElementToNode.AddFirstTimestamp(Network.MyNode, Network.Now().Ticks);
+                        }
                         ToSendToNode.Add(ElementToNode);
                         lock (Data.SendedNode)
                           Data.SendedNode.Add(Node);
+                        lock (LastTransmission)
+                        {
+                          LastTransmission.Remove(Level);
+                          LastTransmission.Add(Level, DateTime.UtcNow);
+                        }
                       }
-                    }
+                  }
+            }
+          }
+          var ResponseMonitorForLevel0 = new ProtocolClass.ResponseMonitor
+          {
+            Level0Connections = Level0Connections
+          };
           foreach (var ToSend in DataToNode)
           {
-            Network.Protocol.SendElementsToNode(ToSend.Value, ToSend.Key);
-            lock (LastTransmission)
-            {
-              LastTransmission.Remove(ToSend.Key);
-              LastTransmission.Add(ToSend.Key, DateTime.UtcNow);
-            }
+            if (Level0Connections != null && Level0Connections.Contains(ToSend.Key))
+              Network.Protocol.SendElementsToNode(ToSend.Value, ToSend.Key, ResponseMonitorForLevel0);
+            else
+              Network.Protocol.SendElementsToNode(ToSend.Value, ToSend.Key);
           }
         }
       }
@@ -419,7 +451,9 @@ namespace NetworkManager
         else
         {
           long Timestamp = Now().Ticks;
-          var Element = new Element() { Timestamp = Timestamp, XmlObject = XmlObject };
+          //var Element = new Element() { Timestamp = Timestamp, XmlObject = XmlObject };
+          //At level 0 the timestamp will be assigned before transmission to the node in order to reduce the difference with the timestamp on the node
+          var Element = new Element() { XmlObject = XmlObject };
           lock (Buffer)
           {
             var ElementBuffer = (ElementBuffer)Element;
@@ -465,7 +499,7 @@ namespace NetworkManager
                   // The object must then be put on standby until the node sends all the certificates for the timestamp.
                   if (ObjToNode.CheckNodeThatStartedDistributingTheObject(FromNode))
                   {
-                    var Signature = ObjToNode.CreateTheDignatureForTheTimestamp(Network.MyNode);
+                    var Signature = ObjToNode.CreateTheSignatureForTheTimestamp(Network.MyNode);
                     StandByList.Add(ObjToNode);
                     if (Result == null)
                       Result = new ObjToNode.TimestampVector();
@@ -500,23 +534,34 @@ namespace NetworkManager
         }
         return Result;
       }
-      internal void UnlockElementsInStandBy(ObjToNode.TimestampVector SignedTimestamps, Node FromNode)
+      internal bool UnlockElementsInStandBy(ObjToNode.TimestampVector SignedTimestamps, Node FromNode)
       {
         lock (Buffer)
         {
           var Count = Buffer.Count();
-          foreach (var ObjToNode in StandByList)
-            if (SignedTimestamps.SignedTimestamp.TryGetValue(ObjToNode.ShortHash, out string Signatures))
-            {
-              ObjToNode.SignedTimestamp = Signatures;
-              Buffer.Add((ElementBuffer)(Element)ObjToNode);
-            }
+          var Remove = new List<ObjToNode>();
+          lock (StandByList)
+          {
+            foreach (var ObjToNode in StandByList)
+              if (SignedTimestamps.SignedTimestamp.TryGetValue(ObjToNode.ShortHash, out string Signatures))
+              {
+                Remove.Add(ObjToNode);
+                ObjToNode.SignedTimestamp = Signatures;
+                if (ObjToNode.CheckSignedTimestamp(Network) == ObjToNode.CheckSignedTimestampResult.Ok)
+                {
+                  Buffer.Add((ElementBuffer)(Element)ObjToNode);
+                }
+              }
+            foreach (var item in Remove)
+              StandByList.Remove(item);
+          }
           if (Count != Buffer.Count())
           {
             SortBuffer();
             Spooler.DataDelivery();
           }
         }
+        return true;
       }
       private void UpdateStats(TimeSpan Value, bool FirstAdd = false)
       {
@@ -594,9 +639,8 @@ namespace NetworkManager
         /// </summary>
         /// <param name="MyNode">Your own Node</param>
         /// <returns>Returns the signature if the timestamp assigned by the node is correct, otherwise null</returns>
-        internal string CreateTheDignatureForTheTimestamp(Node MyNode)
+        internal string CreateTheSignatureForTheTimestamp(Node MyNode)
         {
-          var IpNode = BitConverter.GetBytes(MyNode.IP);
           var ThisMoment = Now();
           var DT = new DateTime(Timestamp);
           var Margin = 0.5; // Calculates a margin because the clocks on the nodes may not be perfectly synchronized
@@ -606,11 +650,21 @@ namespace NetworkManager
             if (ThisMoment <= DT.AddSeconds(MaximumTimeToTransmitTheDataOnTheNode + Margin))
             {
               // Ok, I can certify the date and time
-              var SignedTimestamp = MyNode.RSA.SignHash(Hash(), System.Security.Cryptography.CryptoConfig.MapNameToOID("SHA256"));
-              return Convert.ToBase64String(IpNode.Concat(SignedTimestamp).ToArray());
+              return GetTimestamp(MyNode);
             }
           }
           return null;
+        }
+        private string GetTimestamp(Node Node)
+        {
+          var IpNode = BitConverter.GetBytes(Node.IP);
+          var SignedTimestamp = Node.RSA.SignHash(Hash(), System.Security.Cryptography.CryptoConfig.MapNameToOID("SHA256"));
+          return Convert.ToBase64String(IpNode.Concat(SignedTimestamp).ToArray());
+        }
+        internal void AddFirstTimestamp(Node NodeLevel0, long Timestamp)
+        {
+          this.Timestamp = Timestamp;
+          this.SignedTimestamp = GetTimestamp(NodeLevel0);
         }
         internal enum CheckSignedTimestampResult { Ok, NodeThatPutTheSignatureNotFound, InvalidSignature, NonCompliantNetworkConfiguration }
         /// <summary>
@@ -620,8 +674,10 @@ namespace NetworkManager
         /// <param name="CurrentNodeList"></param>
         /// <param name="NodesRemoved"></param>
         /// <returns>Result of the operation</returns>
-        internal CheckSignedTimestampResult CheckSignedTimestamp(Network Network, List<Node> CurrentNodeList, List<Node> NodesRemoved)
+        internal CheckSignedTimestampResult CheckSignedTimestamp(Network Network)
         {
+          var CurrentNodeList = Network.NodeList;
+          var NodesRemoved = new List<Node>(); //=============== sistemare questo valore e finire ===================================
           var LenT = 30;
           var SignedTimestamps = Convert.FromBase64String(SignedTimestamp);
           var TS = new List<Byte[]>();
@@ -789,6 +845,23 @@ namespace NetworkManager
                   }
                   else
                     ReturnObject = ProtocolClass.StandardAnsware.Error;
+
+                else if (Rq == ProtocolClass.StandardMessages.SendTimestampSignatureToNode)
+                  if (Converter.XmlToObject(XmlObject, typeof(BufferManagerClass.ObjToNode.TimestampVector), out object TimestampVector))
+                  {
+                    var UintFromIP = Converter.IpToUint(FromIP);
+                    var FromNode = NodeList.Find((x) => x.IP == UintFromIP);
+                    if (FromNode != null)
+                    {
+                      if (BufferManager.UnlockElementsInStandBy((BufferManagerClass.ObjToNode.TimestampVector)TimestampVector, FromNode))
+                        ReturnObject = ProtocolClass.StandardAnsware.Ok;
+                      else
+                        ReturnObject = ProtocolClass.StandardAnsware.Error;
+                    }
+                  }
+                  else
+                    ReturnObject = ProtocolClass.StandardAnsware.Error;
+
                 else if (Rq == ProtocolClass.StandardMessages.AddToBuffer)
                   if (BufferManager.AddLocal(XmlObject) == true)
                     ReturnObject = ProtocolClass.StandardAnsware.Ok;
@@ -1208,7 +1281,10 @@ namespace NetworkManager
           XmlResult = Network.Comunication.GetObjectSync(ToNode.Address, Request, Obj, ToNode.MachineName + ".");
         } while (string.IsNullOrEmpty(XmlResult) && Try <= 10);
         if (Try > 10)
+        {
           _IsOnline = false;
+          OnlineDetection.WaitForInternetConnection();
+        }
         else
           _IsOnline = true;
         return XmlResult;
@@ -1217,7 +1293,7 @@ namespace NetworkManager
       {
         return NotifyToNode(ToNode, Message.ToString(), Obj);
       }
-      internal enum StandardMessages { NetworkNodes, ImOnline, ImOffline, TestSpeed, AddToBuffer, SendElementsToNode, GetStats }
+      internal enum StandardMessages { NetworkNodes, ImOnline, ImOffline, TestSpeed, AddToBuffer, SendElementsToNode, SendTimestampSignatureToNode, GetStats }
       public enum StandardAnsware { Ok, Error, DuplicateIP, TooSlow, Failure, NoAnsware, Declined }
       internal List<Node> GetNetworkNodes(Node EntryPoint)
       {
@@ -1312,74 +1388,111 @@ namespace NetworkManager
           return StandardAnsware.Error;
         }
       }
-      internal void SendElementsToNode(List<BufferManagerClass.ObjToNode> Elements, Node ToNode)
+      internal class ResponseMonitor
+      {
+        public int ResponseCounter;
+        public List<Node> Level0Connections;
+      }
+      /// <summary>
+      /// It transfers a list of elements to a node, if this is the node at level 0, it means that these elements have just been taken into charge, it will then be distributed to all connections at level 0, collect all the signatures that certify the timestamp, and send the signatures to the nodes connected to level 0.
+      /// This procedure is used to create a decentralized timestamp within the network.
+      /// </summary>
+      /// <param name="Elements">Element to send to the node</param>
+      /// <param name="ToNode">Node that will receive the elements</param>
+      /// <param name="ResponseMonitor">This parameter is specified only if we are at level 0 of the distribution of the elements, it is necessary to receive the timestamp signed by all the nodes connected to this level</param>
+      internal void SendElementsToNode(List<BufferManagerClass.ObjToNode> Elements, Node ToNode, ResponseMonitor ResponseMonitor = null)
       {
         new System.Threading.Thread(() =>
         {
           string XmlResult = null;
-          int Attempts = 0;
-          do
+          //Verify if the node is disconnected
+          if (Network.NodeList.Contains(ToNode))
           {
-            Attempts += 1;
-            //Verify if the node is disconnected
-            if (Network.NodeList.Contains(ToNode))
+            XmlResult = SendRequest(ToNode, StandardMessages.SendElementsToNode, Elements);
+            if (Utility.GetObjectName(XmlResult) == "TimestampVector")
             {
-              XmlResult = SendRequest(ToNode, StandardMessages.SendElementsToNode, Elements);
-              if (Utility.GetObjectName(XmlResult) == "TimestampVector")
+              if (Converter.XmlToObject(XmlResult, typeof(BufferManagerClass.ObjToNode.TimestampVector), out object ObjTimestampVector))
               {
-                //ObjToNode.TimestampVector
-                //var Obj   Converter.XmlToObject(XmlResult, )
-                if (Converter.XmlToObject(XmlResult, typeof(BufferManagerClass.ObjToNode.TimestampVector), out object ObjTimestampVector))
+                var TimestampVector = (BufferManagerClass.ObjToNode.TimestampVector)ObjTimestampVector;
+                foreach (var Element in Elements)
                 {
-                  var TimestampVector = (BufferManagerClass.ObjToNode.TimestampVector)ObjTimestampVector;
+                  if (TimestampVector.SignedTimestamp.TryGetValue(Element.ShortHash, out string SignedTimestamp))
+                  {
+                    Element.SignedTimestamp += SignedTimestamp;
+                  }
                 }
               }
             }
-          } while (string.IsNullOrEmpty(XmlResult) && Attempts < 3);
-          if (string.IsNullOrEmpty(XmlResult))
-            OnlineDetection.WaitForInternetConnection();
+            if (ResponseMonitor != null)
+            {
+              ResponseMonitor.ResponseCounter += 1;
+              if (ResponseMonitor.ResponseCounter == ResponseMonitor.Level0Connections.Count)
+              {
+                // All nodes connected to the zero level have signed the timestamp, now the signature of the timestamp of all the nodes must be sent to every single node.
+                // This operation is used to create a decentralized timestamp.
+                var TimestampVector = new BufferManagerClass.ObjToNode.TimestampVector();
+                foreach (var Element in Elements)
+                  TimestampVector.SignedTimestamp.Add(Element.ShortHash, Element.SignedTimestamp);
+                foreach (var Node in ResponseMonitor.Level0Connections)
+                  SendTimestampSignatureToNode(TimestampVector, Node);
+              }
+            }
+          }
         }).Start();
       }
-    }
-    private static class OnlineDetection
-    {
-      internal static bool CheckImOnline()
+      internal void SendTimestampSignatureToNode(BufferManagerClass.ObjToNode.TimestampVector TimestampVector, Node ToNode)
       {
-        try
+        new System.Threading.Thread(() =>
         {
-          bool r1 = (new System.Net.NetworkInformation.Ping().Send("www.google.com.mx").Status == System.Net.NetworkInformation.IPStatus.Success);
-          bool r2 = (new System.Net.NetworkInformation.Ping().Send("www.bing.com").Status == System.Net.NetworkInformation.IPStatus.Success);
-          return r1 && r2;
-        }
-        catch (Exception)
-        {
-          return false;
-        }
-      }
-      private static bool IsOnline;
-      private static System.Threading.Timer CheckInternetConnection = new System.Threading.Timer((object obj) =>
-      {
-        IsOnline = CheckImOnline();
-        if (IsOnline)
-        {
-          CheckInternetConnection.Change(System.Threading.Timeout.Infinite, System.Threading.Timeout.Infinite);
-          RunningCheckInternetConnection = 0;
-          foreach (var Network in Networks)
+          string XmlResult = null;
+          //Verify if the node is disconnected
+          if (Network.NodeList.Contains(ToNode))
           {
+            XmlResult = SendRequest(ToNode, StandardMessages.SendTimestampSignatureToNode, TimestampVector);
+          }
+        }).Start();
+      }
 
+      internal static class OnlineDetection
+      {
+        internal static bool CheckImOnline()
+        {
+          try
+          {
+            bool r1 = (new System.Net.NetworkInformation.Ping().Send("www.google.com.mx").Status == System.Net.NetworkInformation.IPStatus.Success);
+            bool r2 = (new System.Net.NetworkInformation.Ping().Send("www.bing.com").Status == System.Net.NetworkInformation.IPStatus.Success);
+            return r1 && r2;
+          }
+          catch (Exception)
+          {
+            return false;
           }
         }
-      }, null, System.Threading.Timeout.Infinite, System.Threading.Timeout.Infinite);
+        private static bool IsOnline;
+        private static System.Threading.Timer CheckInternetConnection = new System.Threading.Timer((object obj) =>
+        {
+          IsOnline = CheckImOnline();
+          if (IsOnline)
+          {
+            CheckInternetConnection.Change(System.Threading.Timeout.Infinite, System.Threading.Timeout.Infinite);
+            RunningCheckInternetConnection = 0;
+            foreach (var Network in Networks)
+            {
 
-      private static int RunningCheckInternetConnection = 0;
-      /// <summary>
-      /// He waits and checks the internet connection, and starts the communication protocol by notifying the online presence
-      /// </summary>
-      internal static void WaitForInternetConnection()
-      {
-        RunningCheckInternetConnection += 1;
-        if (RunningCheckInternetConnection == 1)
-          CheckInternetConnection.Change(0, 30000);
+            }
+          }
+        }, null, System.Threading.Timeout.Infinite, System.Threading.Timeout.Infinite);
+
+        private static int RunningCheckInternetConnection = 0;
+        /// <summary>
+        /// He waits and checks the internet connection, and starts the communication protocol by notifying the online presence
+        /// </summary>
+        internal static void WaitForInternetConnection()
+        {
+          RunningCheckInternetConnection += 1;
+          if (RunningCheckInternetConnection == 1)
+            CheckInternetConnection.Change(0, 30000);
+        }
       }
     }
   }
