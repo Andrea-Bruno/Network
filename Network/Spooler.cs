@@ -70,7 +70,7 @@ namespace NetworkManager
                     {
                       // We assign the timestamp and sign it
                       // The nodes of level 1 that will receive this element, will verify the timestamp and if congruous they sign it and return the signature in response to the forwarding.
-                      ElementToNode.AddFirstTimestamp(Network.MyNode, Now().Ticks);
+                      ElementToNode.AddFirstTimestamp(Network.MyNode, Network.Now.Ticks);
                     }
                     ToSendToNode.Add(ElementToNode);
                     lock (Data.SendedNode)

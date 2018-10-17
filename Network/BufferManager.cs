@@ -46,7 +46,7 @@ namespace NetworkManager
       lock (Buffer)
       {
         var ToRemove = new List<ElementBuffer>();
-        var ThisTime = Now();
+        var ThisTime = Network.Now;
         foreach (var item in Buffer)
         {
           if ((ThisTime - new DateTime(item.Timestamp)) > Network.MappingNetwork.NetworkSyncTimeSpan)
@@ -77,7 +77,7 @@ namespace NetworkManager
         return false;
       else
       {
-        long Timestamp = Now().Ticks;
+        long Timestamp = Network.Now.Ticks;
         //var Element = new Element() { Timestamp = Timestamp, XmlObject = XmlObject };
         //At level 0 the timestamp will be assigned before transmission to the node in order to reduce the difference with the timestamp on the node
         var Element = new Element() { XmlObject = XmlObject };
@@ -108,7 +108,7 @@ namespace NetworkManager
       lock (Buffer)
       {
         var Count = Buffer.Count;
-        var ThisTime = Now();
+        var ThisTime = Network.Now;
         foreach (var ObjToNode in Elements)
         {
           var TimePassedFromInsertion = ThisTime - new DateTime(ObjToNode.Timestamp);
@@ -126,7 +126,7 @@ namespace NetworkManager
                 // The object must then be put on standby until the node sends all the certificates for the timestamp.
                 if (ObjToNode.CheckNodeThatStartedDistributingTheObject(FromNode))
                 {
-                  var Signature = ObjToNode.CreateTheSignatureForTheTimestamp(Network.MyNode);
+                  var Signature = ObjToNode.CreateTheSignatureForTheTimestamp(Network.MyNode, Network.Now);
                   StandByList.Add(ObjToNode);
                   if (Result == null)
                     Result = new ObjToNode.TimestampVector();
@@ -266,9 +266,9 @@ namespace NetworkManager
       /// </summary>
       /// <param name="MyNode">Your own Node</param>
       /// <returns>Returns the signature if the timestamp assigned by the node is correct, otherwise null</returns>
-      internal string CreateTheSignatureForTheTimestamp(Node MyNode)
+      internal string CreateTheSignatureForTheTimestamp(Node MyNode, DateTime Now )
       {
-        var ThisMoment = Now();
+        var ThisMoment = Now;
         var DT = new DateTime(Timestamp);
         var Margin = 0.5; // Calculates a margin because the clocks on the nodes may not be perfectly synchronized
         if (ThisMoment >= DT.AddSeconds(-Margin))
@@ -368,9 +368,8 @@ namespace NetworkManager
         Signature = SignedTimestamp.Skip(4).ToArray();
       }
     }
-    public delegate void SyncData(string XmlObject, long Timestamp);
     /// <summary>
-    /// Add a action used to local sync the objects in the buffer
+    /// Add a action used to local sync the objects coming from the buffer
     /// </summary>
     /// <param name="Action">Action to execute for every object</param>
     /// <param name="ForObjectName">Indicates what kind of objects will be treated by this action</param>

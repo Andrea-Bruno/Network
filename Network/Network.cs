@@ -6,7 +6,7 @@ using System.Xml.Serialization;
 
 namespace NetworkManager
 {
-  public class Network
+  public class Network : Device
   {
     /// <summary>
     /// This method initializes the network.
@@ -16,8 +16,14 @@ namespace NetworkManager
     /// <param name="EntryPoints">The list of permanent access points nodes, to access the network</param>
     /// <param name="NetworkName">The name of the infrastructure. For tests we recommend using "testnet"</param>
     /// <param name="MyAddress">Your web address. If you do not want to create the node, omit this parameter</param>
-    public Network(Node[] EntryPoints, string NetworkName = "testnet", string MyAddress = null)
+    /// <param name="VirtualDevice">Optional parameter used to create a virtual machine for testing. The virtual machine helps the developer to create a simulated dummy network in the machine used for development. It is thus possible to create multiple nodes by simulating a p2p network. The list of already instanced devices is obtained through Network.Devices</param>
+    public Network(Node[] EntryPoints, string NetworkName = "testnet", string MyAddress = null, VirtualDevice VirtualDevice = null) : base(VirtualDevice)
     {
+      //if (VirtualDevice != null)
+      //{
+      //  //base = new Device() { VirtualDevice = VirtualDevice };
+      //}
+
       Comunication = new Comunication(NetworkName, null);
       NodeList = new List<Node>(EntryPoints);
       Networks.Add(this);
@@ -30,7 +36,7 @@ namespace NetworkManager
       //Setup.Network.NetworkName = NetworkName;
       //if (EntryPoints != null)
       //  Setup.Network.EntryPoints = EntryPoints;
-      Protocol.OnlineDetection.WaitForInternetConnection();
+      OnlineDetection.WaitForInternetConnection();
     }
     internal void Start()
     {
@@ -68,7 +74,6 @@ namespace NetworkManager
       }
 
     }
-    internal static List<Network> Networks = new List<Network>();
     //==== REMOVE THE TEST IN THE FINAL VERSION
     public void Test()
     {
@@ -94,15 +99,8 @@ namespace NetworkManager
     public string MyAddress { get { return _MyAddress; } }
     private string _NetworkName;
     public string NetworkName { get { return _NetworkName; } }
-    public static string MachineName { get { return Environment.MachineName; } }
     private string _MasterServerMachineName;
     public string MasterServerMachineName { get { return _MasterServerMachineName; } }
-    internal static bool _IsOnline;
-    public static bool IsOnline { get { return _IsOnline; } }
-    internal static DateTime Now()
-    {
-      return DateTime.UtcNow;
-    }
     public class Node
     {
       public Node() { }
@@ -211,20 +209,61 @@ namespace NetworkManager
     {
       return Protocol.AddToSharedBuffer(GetRandomNode(), Object) == Protocol.StandardAnsware.Ok;
     }
-    public static bool OnReceivesHttpRequest(System.Collections.Specialized.NameValueCollection QueryString, System.Collections.Specialized.NameValueCollection Form, string FromIP, out string ContentType, System.IO.Stream OutputStream)
+    public delegate void SyncData(string XmlObject, long Timestamp);
+    /// <summary>
+    /// Add a action used to local sync the objects coming from the buffer
+    /// </summary>
+    /// <param name="Action">Action to execute for every object</param>
+    /// <param name="ForObjectName">Indicates what kind of objects will be treated by this action</param>
+    public bool AddSyncDataFromBufferAction(SyncData Action, string ForObjectName)
     {
+      return BufferManager.AddSyncDataAction(Action, ForObjectName);
+    }
+    /// <summary>
+    /// This procedure receives an http request and processes the response based on the input received and the protocol
+    /// </summary>
+    /// <param name="QueryString">QueryString Collection</param>
+    /// <param name="Form">Form Collection</param>
+    /// <param name="FromIP">the IP of who generated the request</param>
+    /// <param name="ContentType">The ContentType of the answer</param>
+    /// <param name="OutputStream">The stream to which the reply will be sent</param>
+    /// <param name="MyIP">This parameter is used only if you are using virtual devices and you want to direct the request to a specific device. This parameter is used by developers to make simulations using a virtual p2p network</param>
+    /// <returns></returns>
+    public static bool OnReceivesHttpRequest(System.Collections.Specialized.NameValueCollection QueryString, System.Collections.Specialized.NameValueCollection Form, string FromIP, out string ContentType, System.IO.Stream OutputStream, uint MyIP = 0)
+    {
+      BaseDevice Device = null;
+      if (BaseDevices.Count == 1)
+        Device = BaseDevices[0];
+      else
+        Device = BaseDevices.Find(x => x.VirtualDevice.IP == MyIP);
       ContentType = null;
-      var NetworkName = QueryString["network"];
-      foreach (var Network in Networks)
+      if (Device != null)
       {
-        if (NetworkName == Network.NetworkName)
-          if (Network._OnReceivesHttpRequest(QueryString, Form, FromIP, out ContentType, OutputStream))
-            return true;
+        var NetworkName = QueryString["network"];
+        foreach (var Network in Device.Networks)
+        {
+          if (NetworkName == Network.NetworkName)
+            if (Network._OnReceivesHttpRequest(QueryString, Form, FromIP, out ContentType, OutputStream))
+              return true;
+        }
       }
       return false;
     }
     private bool _OnReceivesHttpRequest(System.Collections.Specialized.NameValueCollection QueryString, System.Collections.Specialized.NameValueCollection Form, string FromIP, out string ContentType, System.IO.Stream OutputStream)
     {
+      //ContentType = null;
+      //var NetworkName = QueryString["network"];
+
+      //foreach (var Network in Networks)
+      //{
+      //  if (NetworkName == Network.NetworkName)
+      //    if (Network._OnReceivesHttpRequest(QueryString, Form, FromIP, out ContentType, OutputStream))
+      //      return true;
+
+
+      //}
+      //return false;
+
       var AppName = QueryString["app"];
       var ToUser = QueryString["touser"];
       var FromUser = QueryString["fromuser"];
@@ -393,5 +432,137 @@ namespace NetworkManager
     /// </summary>
     public readonly Comunication Comunication;
     public readonly Protocol Protocol;
+  }
+
+  public class Device
+  {
+    /// <summary>
+    /// Returns the list of virtual devices already initialized, and the real device if already initialized
+    /// </summary>
+    /// <param name="VirtualDevice"></param>
+    public Device(VirtualDevice VirtualDevice)
+    {
+      OnlineDetection = new OnlineDetectionClass(this);
+      this.VirtualDevice = VirtualDevice;
+      if (VirtualDevice != null)
+      {
+        BD = BaseDevices.Find(x => x.VirtualDevice == VirtualDevice);
+        if (BD == null)
+          BD = new BaseDevice();
+      }
+      else
+      {
+        if (RealDevice == null)
+          RealDevice = new BaseDevice();
+        BD = RealDevice;
+      }
+      if (!BaseDevices.Contains(BD))
+        BaseDevices.Add(BD);
+    }
+    public static List<VirtualDevice> Devices
+    {
+      get
+      {
+        var List = new List<VirtualDevice>();
+        foreach (var BaseDevice in BaseDevices)
+        {
+          List.Add(BaseDevice.VirtualDevice);
+        }
+        return List;
+      }
+    }
+    internal static List<BaseDevice> BaseDevices = new List<BaseDevice>();
+    private readonly BaseDevice BD;
+    internal List<Network> Networks { get { return BD.Networks; } }
+    public string MachineName { get { return BD.MachineName; } }
+    internal bool _IsOnline { set { BD._IsOnline = value; } }
+    internal bool IsOnline { get { return BD.IsOnline; } }
+    internal DateTime Now { get { return BD.Now(); } }
+    internal VirtualDevice VirtualDevice { get { return BD.VirtualDevice; } set { BD.VirtualDevice = value; } }
+    private static BaseDevice RealDevice;
+    internal class BaseDevice
+    {
+      public List<Network> Networks = new List<Network>();
+      public string MachineName
+      {
+        get
+        {
+          if (VirtualDevice == null)
+            return VirtualDevice.MachineName;
+          else
+            return Environment.MachineName;
+        }
+      }
+      internal bool _IsOnline;
+      public bool IsOnline { get { return _IsOnline; } }
+      internal DateTime Now()
+      {
+        return DateTime.UtcNow;
+      }
+      internal VirtualDevice VirtualDevice;
+    }
+    internal readonly OnlineDetectionClass OnlineDetection;
+    internal class OnlineDetectionClass
+    {
+      public OnlineDetectionClass(Device Device)
+      {
+        CheckInternetConnection = new System.Timers.Timer(30000) { AutoReset = true, Enabled = false };
+        CheckInternetConnection.Elapsed += (sender, e) => CheckInternet();
+        this.Device = Device;
+      }
+      private readonly Device Device;
+      private bool CheckImOnline()
+      {
+        if (Device.BD.VirtualDevice != null)
+          return Device.IsOnline;
+        try
+        {
+          bool r1 = (new System.Net.NetworkInformation.Ping().Send("www.google.com.mx").Status == System.Net.NetworkInformation.IPStatus.Success);
+          bool r2 = (new System.Net.NetworkInformation.Ping().Send("www.bing.com").Status == System.Net.NetworkInformation.IPStatus.Success);
+          return r1 && r2;
+        }
+        catch (Exception)
+        {
+          return false;
+        }
+      }
+      private System.Timers.Timer CheckInternetConnection;
+      private void CheckInternet()
+      {
+        Device.BD._IsOnline = CheckImOnline();
+        if (Device.BD._IsOnline)
+        {
+          CheckInternetConnection.Stop();
+          RunningCheckInternetConnection = 0;
+        }
+      }
+
+      private int RunningCheckInternetConnection = 0;
+      /// <summary>
+      /// He waits and checks the internet connection, and starts the communication protocol by notifying the online presence
+      /// </summary>
+      internal void WaitForInternetConnection()
+      {
+        RunningCheckInternetConnection += 1;
+        if (RunningCheckInternetConnection == 1)
+          CheckInternetConnection.Start();
+      }
+    }
+  }
+
+  public class VirtualDevice
+  {
+    public VirtualDevice() { IP = LastIp + 1; LastIp = IP; }
+    private static uint LastIp = 0;
+    public string MachineName = "VirtualDevice";
+    /// <summary>
+    /// Something like that "sim://xxxxxxx"
+    /// </summary>
+    public string Address;
+    public uint IP;
+    public void SetIP(string IP)
+    {
+      this.IP = Converter.IpToUint(IP);
+    }
   }
 }

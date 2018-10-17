@@ -4,7 +4,7 @@ using System.Text;
 
 namespace NetworkManager
 {
-  internal static class Utility
+  public static class Utility
   {
     public static void Log(string Category, int MaxRecord, string ErrorMessage)
     {

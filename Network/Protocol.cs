@@ -52,11 +52,9 @@ namespace NetworkManager
       } while (string.IsNullOrEmpty(XmlResult) && Try <= 10);
       if (Try > 10)
       {
-        _IsOnline = false;
-        OnlineDetection.WaitForInternetConnection();
+        Network._IsOnline = false;
+        Network.OnlineDetection.WaitForInternetConnection();
       }
-      else
-        _IsOnline = true;
       return XmlResult;
     }
     private string SendRequest(Node ToNode, StandardMessages Message, object Obj = null)
@@ -221,48 +219,6 @@ namespace NetworkManager
           XmlResult = SendRequest(ToNode, StandardMessages.SendTimestampSignatureToNode, TimestampVector);
         }
       }).Start();
-    }
-
-    internal static class OnlineDetection
-    {
-      internal static bool CheckImOnline()
-      {
-        try
-        {
-          bool r1 = (new System.Net.NetworkInformation.Ping().Send("www.google.com.mx").Status == System.Net.NetworkInformation.IPStatus.Success);
-          bool r2 = (new System.Net.NetworkInformation.Ping().Send("www.bing.com").Status == System.Net.NetworkInformation.IPStatus.Success);
-          return r1 && r2;
-        }
-        catch (Exception)
-        {
-          return false;
-        }
-      }
-      private static bool IsOnline;
-      private static System.Threading.Timer CheckInternetConnection = new System.Threading.Timer((object obj) =>
-      {
-        IsOnline = CheckImOnline();
-        if (IsOnline)
-        {
-          CheckInternetConnection.Change(System.Threading.Timeout.Infinite, System.Threading.Timeout.Infinite);
-          RunningCheckInternetConnection = 0;
-          foreach (var Network in Networks)
-          {
-
-          }
-        }
-      }, null, System.Threading.Timeout.Infinite, System.Threading.Timeout.Infinite);
-
-      private static int RunningCheckInternetConnection = 0;
-      /// <summary>
-      /// He waits and checks the internet connection, and starts the communication protocol by notifying the online presence
-      /// </summary>
-      internal static void WaitForInternetConnection()
-      {
-        RunningCheckInternetConnection += 1;
-        if (RunningCheckInternetConnection == 1)
-          CheckInternetConnection.Change(0, 30000);
-      }
     }
   }
 
