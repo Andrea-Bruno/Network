@@ -35,7 +35,9 @@ namespace NetworkManager
     }
     public static VirtualDevice FindDeviceByAddress(string Address)
     {
-      return VirtualDevices.Find(x => Address.StartsWith(x.Address));
+      Uri uriAddress = new Uri(Address);
+      var Domain = uriAddress.GetLeftPart(UriPartial.Authority);
+      return VirtualDevices.Find(x => x.Address == Domain);
     }
     public static List<VirtualDevice> VirtualDevices
     {
@@ -53,8 +55,11 @@ namespace NetworkManager
     private readonly BaseDevice BD;
     internal List<Network> Networks { get { return BD.Networks; } }
     public string MachineName { get { return BD.MachineName; } }
-    internal bool _IsOnline { set { BD._IsOnline = value; } }
-    internal bool IsOnline { get { return BD.IsOnline; } }
+    /// <summary>
+    /// If the internet works correctly it returns "true". If the auto detect realizes that there is no internet connection then it returns "false".
+    /// In this case, auto detect will continue to monitor the network and this function will return "true" as soon as the connection returns.
+    /// </summary>
+    public bool IsOnline { get { return BD._IsOnline; } internal set { BD._IsOnline = value; } }
     internal DateTime Now { get { return BD.Now(); } }
     internal VirtualDevice VirtualDevice { get { return BD.VirtualDevice; } set { BD.VirtualDevice = value; } }
     private static BaseDevice RealDevice;
@@ -71,7 +76,7 @@ namespace NetworkManager
             return Environment.MachineName;
         }
       }
-      internal bool _IsOnline;
+      internal bool _IsOnline = true;
       public bool IsOnline { get { return _IsOnline; } }
       internal DateTime Now()
       {
@@ -85,15 +90,65 @@ namespace NetworkManager
       /// <param name="Form"></param>
       /// <param name="FromIP"></param>
       /// <returns></returns>
-      public string WebServer(System.Collections.Specialized.NameValueCollection QueryString, System.Collections.Specialized.NameValueCollection Form, string FromIP)
+      public WebResponse WebServer(WebRequest Request)
       {
-        using (System.IO.Stream Stream = new System.IO.MemoryStream())
         {
-          if (OnReceivesHttpRequest(QueryString, Form, FromIP, out string ContentType, Stream))
-            Stream.Position = 0;
-          using (var streamReader = new System.IO.StreamReader(Stream))
-            return streamReader.ReadToEnd();
+          WebResponse Response = null;
+          if (VirtualDevice.IsOnline)
+          {
+            CurrentWebRequest += 1;
+            if (CurrentWebRequest > 5)
+            {
+              Response = new WebResponse(null, null, 429, "Too Many Requests");
+            }
+            else
+            {
+              using (System.IO.Stream Stream = new System.IO.MemoryStream())
+                if (OnReceivesHttpRequest(Request.QueryString, Request.Form, Request.FromIP, out string ContentType, Stream))
+                {
+                  float MB = Stream.Length / 1048576f;
+                  // It is empirical but excellent for simulating the network speed as set by the Virtual Server
+                  int PauseMS = (int)(MB / VirtualDevice.NetSpeed * 1000 * CurrentWebRequest);
+                  System.Threading.Thread.Sleep(PauseMS);
+                  Stream.Position = 0;
+                  using (var streamReader = new System.IO.StreamReader(Stream))
+                    Response = new WebResponse(streamReader.ReadToEnd(), ContentType, 200, "OK");
+                }
+            }
+            CurrentWebRequest -= 1;
+          }
+          return Response; //null if is offline
         }
+      }
+      private int CurrentWebRequest = 0;
+      public class WebResponse
+      {
+        internal WebResponse(string Text, string ContentType, int StatusCode, string StatusDescription)
+        {
+          this.Text = Text;
+          this.StatusCode = StatusCode;
+          this.StatusDescription = StatusDescription;
+          if (ContentType != null)
+            Headers.Add("Content-Type", ContentType);
+        }
+        public string Status { get { return StatusCode.ToString() + " " + StatusDescription; } }
+        public readonly int StatusCode;
+        public readonly string StatusDescription;
+        public readonly string Text;
+        public readonly System.Collections.Specialized.NameValueCollection Headers = new System.Collections.Specialized.NameValueCollection();
+      }
+      public class WebRequest
+      {
+        public WebRequest(System.Collections.Specialized.NameValueCollection QueryString, System.Collections.Specialized.NameValueCollection Form, string FromIP)
+        {
+          this.QueryString = QueryString;
+          this.Form = Form;
+          this.FromIP = FromIP;
+        }
+        public readonly System.Collections.Specialized.NameValueCollection QueryString;
+        public readonly System.Collections.Specialized.NameValueCollection Form;
+        public readonly string FromIP;
+        public string Method { get { return Form == null ? "GET" : "POST"; } }
       }
       /// <summary>
       /// This procedure receives an http request and processes the response based on the input received and the protocol
@@ -246,6 +301,8 @@ namespace NetworkManager
               }
               catch (Exception ex)
               {
+                System.Diagnostics.Debug.Print(ex.Message);
+                System.Diagnostics.Debugger.Break();
                 ReturnObject = ex.Message;
               }
               if (ReturnObject != null && string.IsNullOrEmpty(Request))
@@ -283,37 +340,42 @@ namespace NetworkManager
     {
       public OnlineDetectionClass(Device Device)
       {
-        CheckInternetConnection = new System.Timers.Timer(30000) { AutoReset = true, Enabled = false };
-        CheckInternetConnection.Elapsed += (sender, e) => CheckInternet();
+        CheckInternetConnection = new System.Timers.Timer(30000) { AutoReset = true, Enabled = false, };
+        CheckInternetConnection.Elapsed += (sender, e) => ElapsedCheckInternetConnection();
         this.Device = Device;
       }
       private readonly Device Device;
       private bool CheckImOnline()
       {
         if (Device.BD.VirtualDevice != null)
-          return Device.IsOnline;
+          return Device.BD.VirtualDevice.IsOnline;
         try
         {
           bool r1 = (new System.Net.NetworkInformation.Ping().Send("www.google.com.mx").Status == System.Net.NetworkInformation.IPStatus.Success);
           bool r2 = (new System.Net.NetworkInformation.Ping().Send("www.bing.com").Status == System.Net.NetworkInformation.IPStatus.Success);
           return r1 && r2;
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-          return false;
+          System.Diagnostics.Debug.Print(ex.Message);
+          System.Diagnostics.Debugger.Break();
         }
+        return false;
       }
       private System.Timers.Timer CheckInternetConnection;
-      private void CheckInternet()
+      private void ElapsedCheckInternetConnection()
       {
-        Device.BD._IsOnline = CheckImOnline();
-        if (Device.BD._IsOnline)
+        if (RunningCheckInternetConnection == 1)
         {
-          CheckInternetConnection.Stop();
-          RunningCheckInternetConnection = 0;
+          Device.BD._IsOnline = CheckImOnline();
+          if (Device.BD._IsOnline)
+          {
+            CheckInternetConnection.Stop();
+            RunningCheckInternetConnection = 0;
+            Device.Networks.ForEach(x => x.Start());
+          }
         }
       }
-
       private int RunningCheckInternetConnection = 0;
       /// <summary>
       /// He waits and checks the internet connection, and starts the communication protocol by notifying the online presence
@@ -322,7 +384,10 @@ namespace NetworkManager
       {
         RunningCheckInternetConnection += 1;
         if (RunningCheckInternetConnection == 1)
+        {
           CheckInternetConnection.Start();
+          ElapsedCheckInternetConnection();
+        }
       }
     }
     public delegate bool OnReceivesHttpRequestDelegate(System.Collections.Specialized.NameValueCollection QueryString, System.Collections.Specialized.NameValueCollection Form, string FromIP, out string ContentType, System.IO.Stream OutputStream);

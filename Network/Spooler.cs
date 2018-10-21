@@ -16,13 +16,12 @@ namespace NetworkManager
       this.Network = Network;
       this.BufferManager = Network.BufferManager;
       this.MappingNetwork = Network.MappingNetwork;
-      SpoolerTimer = new System.Timers.Timer(1000) { AutoReset = true, Enabled = true };
+      SpoolerTimer = new System.Timers.Timer(PauseBetweenTransmissionOnTheNode) { AutoReset = true, Enabled = true };
       SpoolerTimer.Elapsed += (sender, e) => DataDelivery();
     }
     private Network Network;
     private readonly BufferManager BufferManager;
     private readonly MappingNetwork MappingNetwork;
-    private readonly int SpoolerTimeMs = 1000;
     private readonly int PauseBetweenTransmissionOnTheNode = 2000;
     /// <summary>
     /// Memorize when the last communication was made at a certain level

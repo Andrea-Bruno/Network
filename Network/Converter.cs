@@ -53,9 +53,11 @@ namespace NetworkManager
       }
       catch (Exception ex)
       {
-        Obj = null;
-        return false;
+        System.Diagnostics.Debug.Print(ex.Message);
+        System.Diagnostics.Debugger.Break();
       }
+      Obj = null;
+      return false;
     }
   }
 

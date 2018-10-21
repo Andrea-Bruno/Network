@@ -52,7 +52,7 @@ namespace NetworkManager
       } while (string.IsNullOrEmpty(XmlResult) && Try <= 10);
       if (Try > 10)
       {
-        Network._IsOnline = false;
+        Network.IsOnline = false;
         Network.OnlineDetection.WaitForInternetConnection();
       }
       return XmlResult;
@@ -81,8 +81,10 @@ namespace NetworkManager
           Converter.XmlToObject(XmlResult, typeof(StandardAnsware), out object Answare);
           return (StandardAnsware)Answare;
         }
-        catch (Exception)
+        catch (Exception ex)
         {
+          System.Diagnostics.Debug.Print(ex.Message);
+          System.Diagnostics.Debugger.Break();
         }
       return StandardAnsware.Error;
     }
@@ -98,8 +100,10 @@ namespace NetworkManager
         Converter.XmlToObject(XmlResult, typeof(StandardAnsware), out object Answare);
         return (StandardAnsware)Answare;
       }
-      catch (Exception)
+      catch (Exception ex)
       {
+        System.Diagnostics.Debug.Print(ex.Message);
+        System.Diagnostics.Debugger.Break();
       }
       return StandardAnsware.Error;
     }
@@ -113,11 +117,23 @@ namespace NetworkManager
     }
     internal Stats GetStats(Node FromNode)
     {
-      var XmlResult = SendRequest(FromNode, StandardMessages.GetStats);
-      if (string.IsNullOrEmpty(XmlResult))
-        return null;
-      Converter.XmlToObject(XmlResult, typeof(Stats), out object ReturmObj);
-      var Stats = (Stats)ReturmObj;
+      Stats Stats = null;
+      if (FromNode != null)
+      {
+        var XmlResult = SendRequest(FromNode, StandardMessages.GetStats);
+        if (string.IsNullOrEmpty(XmlResult))
+          return null;
+        try
+        {
+          Converter.XmlToObject(XmlResult, typeof(Stats), out object ReturmObj);
+          Stats = (Stats)ReturmObj;
+        }
+        catch (Exception ex)
+        {
+          System.Diagnostics.Debug.Print(ex.Message);
+          System.Diagnostics.Debugger.Break();
+        }
+      }
       return Stats;
     }
 
@@ -151,8 +167,10 @@ namespace NetworkManager
           return Answare;
         }
       }
-      catch (Exception)
+      catch (Exception ex)
       {
+        System.Diagnostics.Debug.Print(ex.Message);
+        System.Diagnostics.Debugger.Break();
         return StandardAnsware.Error;
       }
     }

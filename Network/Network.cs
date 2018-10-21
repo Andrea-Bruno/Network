@@ -35,7 +35,7 @@ namespace NetworkManager
       //Setup.Network.NetworkName = NetworkName;
       //if (EntryPoints != null)
       //  Setup.Network.EntryPoints = EntryPoints;
-      OnReceivesHttpRequest = base.OnReceivesHttpRequest;
+      OnReceivesHttpRequest = base.OnReceivesHttpRequest;//Is ok! Don't worry
       OnlineDetection.WaitForInternetConnection();
     }
     internal void Start()
@@ -58,7 +58,7 @@ namespace NetworkManager
           MyNode = new Node(MachineName, _MyAddress);
           var Stats1 = Protocol.GetStats(GetRandomNode());
           var Stats2 = Protocol.GetStats(GetRandomNode());
-          NetworkLatency = Math.Max(Stats1.NetworkLatency, Stats2.NetworkLatency);
+          NetworkLatency = Math.Max(Stats1?.NetworkLatency ?? 0, Stats2?.NetworkLatency ?? 0);
           MappingNetwork.SetNetworkSyncTimeSpan(NetworkLatency);
           var Answare = Protocol.ImOnline(ConnectionNode, MyNode);
           // if Answare = NoAnsware then I'm the first online node in the network  
@@ -141,8 +141,10 @@ namespace NetworkManager
           var ips = System.Net.Dns.GetHostAddresses(new Uri(Address).Host);
           IP = Converter.IpToUint(ips.Last().ToString());
         }
-        catch (Exception)
+        catch (Exception ex)
         {
+          System.Diagnostics.Debug.Print(ex.Message);
+          System.Diagnostics.Debugger.Break();
         }
       }
     }
