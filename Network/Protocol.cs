@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text;
 using static NetworkManager.Network;
 
@@ -52,6 +53,7 @@ namespace NetworkManager
       } while (string.IsNullOrEmpty(XmlResult) && Try <= 10);
       if (Try > 10)
       {
+        System.Diagnostics.Debugger.Break();
         Network.IsOnline = false;
         Network.OnlineDetection.WaitForInternetConnection();
       }
@@ -61,8 +63,8 @@ namespace NetworkManager
     {
       return NotifyToNode(ToNode, Message.ToString(), Obj);
     }
-    internal enum StandardMessages { NetworkNodes, ImOnline, ImOffline, TestSpeed, AddToBuffer, SendElementsToNode, SendTimestampSignatureToNode, GetStats }
-    public enum StandardAnsware { Ok, Error, DuplicateIP, TooSlow, Failure, NoAnsware, Declined }
+    internal enum StandardMessages { NetworkNodes, ImOnline, ImOffline, RequestTestSpeed, TestSpeed, AddToBuffer, SendElementsToNode, SendTimestampSignatureToNode, GetStats }
+    public enum StandardAnsware { Ok, Disconnected, Error, DuplicateIP, TooSlow, Failure, NoAnsware, Declined, IpError }
     internal List<Node> GetNetworkNodes(Node EntryPoint)
     {
       var XmlResult = SendRequest(EntryPoint, StandardMessages.NetworkNodes);
@@ -91,8 +93,6 @@ namespace NetworkManager
     internal StandardAnsware ImOnline(Node ToNode, Node MyNode)
     {
       var XmlResult = SendRequest(ToNode, StandardMessages.ImOnline, MyNode);
-      MyNode.DetectIP();
-      //this.MyNode = MyNode;
       if (string.IsNullOrEmpty(XmlResult))
         return StandardAnsware.NoAnsware;
       try
@@ -136,23 +136,97 @@ namespace NetworkManager
       }
       return Stats;
     }
-
-    internal bool SpeedTest(Node NodeToTesting)
+    private readonly int SpeedLimit = 1000;
+    internal bool DecentralizedSpeedTest(Node NodeToTesting, out List<SpeedTestResult> SpeedTestResults)
+    {
+      SpeedTestResults = new List<SpeedTestResult>(); 
+      int Best;
+      var Connections = Network.MappingNetwork.GetConnections(0);
+      if (Connections.Count == 0)
+        Best = SpeedTest(NodeToTesting);
+      else
+      {
+        var Speeds = new List<int>();
+        foreach (var Node in Connections)
+        {
+          var XmlResult = SendRequest(Node, StandardMessages.RequestTestSpeed, NodeToTesting);
+          if (!string.IsNullOrEmpty(XmlResult))
+          {
+            try
+            {
+              Converter.XmlToObject(XmlResult, typeof(SpeedTestResult), out object ReturmObj);
+              SpeedTestResult Result = (SpeedTestResult)ReturmObj;
+              SpeedTestResults.Add(Result);
+              if (Result.VerifySignature(Node, NodeToTesting.IP))
+                Speeds.Add(Result.Speed);
+              else
+              {
+                Utility.Log("Node Error", "NodeIP=" + Node.IP + " Error signature in the result of the speed test of the new node");
+                return false;
+              }
+            }
+            catch (Exception ex)
+            {
+              System.Diagnostics.Debug.Print(ex.Message);
+              System.Diagnostics.Debugger.Break();
+              Utility.Log("Node Error", "NodeIP=" + Node.IP + " Error in DecentralizedSpeedTest");
+              return false;
+            }
+          }
+          else
+            return false;
+        }
+        Speeds.Sort();
+        Best = Speeds[0];
+      }
+      return Best != -1 && Best <= SpeedLimit;
+    }
+    internal SpeedTestResult SpeedTestSigned(Node NodeToTesting)
+    {
+      var Result = new SpeedTestResult() { Speed = SpeedTest(NodeToTesting), NodeIP = Network.MyNode.IP };
+      Result.AddSignature(Network.MyNode, NodeToTesting.IP);
+      return Result;
+    }
+    public class SpeedTestResult
     {
 
-      var Start = DateTime.UtcNow;
+      public int Speed;
+      public string Signature;
+      /// <summary>
+      /// IP of signature Node 
+      /// </summary>
+      public uint NodeIP;
+      public long Timestamp;
 
+      private byte[] Data(uint IPNodeToTesting)
+      {
+        return BitConverter.GetBytes(IPNodeToTesting).Concat(BitConverter.GetBytes(Speed)).Concat(BitConverter.GetBytes(Timestamp)).ToArray();
+      }
+      public void AddSignature(Node MyNode, uint IPNodeToTesting)
+      {
+        Signature = Converter.ByteArrayToString(MyNode.RSA.SignHash(Data(IPNodeToTesting), System.Security.Cryptography.CryptoConfig.MapNameToOID("SHA256")));
+      }
+      public bool VerifySignature(Node Node, uint NodeToTestingIP)
+      {
+        return NodeIP == Node.IP && Node.RSA.VerifyHash(Data(NodeToTestingIP), System.Security.Cryptography.CryptoConfig.MapNameToOID("SHA256"), Converter.StringToByteArray(Signature));
+      }
+    }
+    private int SpeedTest(Node NodeToTesting)
+    {
+      var Start = DateTime.UtcNow;
       for (int i = 0; i < 10; i++)
       {
         var XmlResult = SendRequest(NodeToTesting, StandardMessages.TestSpeed);
-        if (XmlResult == null || XmlResult.Length != 1048616)
-          return false;
+        if (XmlResult == null || XmlResult.Length != 131112)
+          return -1;
       }
-      var Speed = (DateTime.UtcNow - Start).TotalMilliseconds;
-      return Speed <= 3000;
+      var Speed = (int)(DateTime.UtcNow - Start).TotalMilliseconds;
+      return Speed;
     }
     internal StandardAnsware AddToSharedBuffer(Node ToNode, Object Object)
     {
+      if (Network.ThisNode.ConnectionStatus != StandardAnsware.Ok)
+        return Network.ThisNode.ConnectionStatus;
       try
       {
         var XmlResult = SendRequest(ToNode, StandardMessages.AddToBuffer, Object);

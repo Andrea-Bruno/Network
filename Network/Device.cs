@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Xml.Serialization;
+using static NetworkManager.Protocol;
 
 namespace NetworkManager
 {
@@ -70,10 +71,8 @@ namespace NetworkManager
       {
         get
         {
-          if (VirtualDevice == null)
-            return VirtualDevice.MachineName;
-          else
-            return Environment.MachineName;
+          var result = VirtualDevice?.MachineName ?? Environment.MachineName;
+          return result;
         }
       }
       internal bool _IsOnline = true;
@@ -218,15 +217,15 @@ namespace NetworkManager
                   {
                     if (Network.Protocol.OnRequestActions.ContainsKey(Request))
                       ReturnObject = Network.Protocol.OnRequestActions[Request](XmlObject);
-                    if (Protocol.StandardMessages.TryParse(Request, out Protocol.StandardMessages Rq))
+                    if (StandardMessages.TryParse(Request, out StandardMessages Rq))
                     {
-                      if (Rq == Protocol.StandardMessages.NetworkNodes)
+                      if (Rq == StandardMessages.NetworkNodes)
                         ReturnObject = Network.NodeList;
-                      else if (Rq == Protocol.StandardMessages.GetStats)
+                      else if (Rq == StandardMessages.GetStats)
                       {
-                        ReturnObject = new Protocol.Stats { NetworkLatency = (int)Network.BufferManager.Stats24h.NetworkLatency.TotalMilliseconds };
+                        ReturnObject = new Stats { NetworkLatency = (int)Network.BufferManager.Stats24h.NetworkLatency.TotalMilliseconds };
                       }
-                      else if (Rq == Protocol.StandardMessages.SendElementsToNode)
+                      else if (Rq == StandardMessages.SendElementsToNode)
                         if (Converter.XmlToObject(XmlObject, typeof(List<BufferManager.ObjToNode>), out object ObjElements))
                         {
                           var UintFromIP = Converter.IpToUint(FromIP);
@@ -235,13 +234,13 @@ namespace NetworkManager
                           {
                             ReturnObject = Network.BufferManager.AddLocalFromNode((List<BufferManager.ObjToNode>)ObjElements, FromNode);
                             if (ReturnObject == null)
-                              ReturnObject = Protocol.StandardAnsware.Ok;
+                              ReturnObject = StandardAnsware.Ok;
                           }
                         }
                         else
-                          ReturnObject = Protocol.StandardAnsware.Error;
+                          ReturnObject = StandardAnsware.Error;
 
-                      else if (Rq == Protocol.StandardMessages.SendTimestampSignatureToNode)
+                      else if (Rq == StandardMessages.SendTimestampSignatureToNode)
                         if (Converter.XmlToObject(XmlObject, typeof(BufferManager.ObjToNode.TimestampVector), out object TimestampVector))
                         {
                           var UintFromIP = Converter.IpToUint(FromIP);
@@ -249,46 +248,57 @@ namespace NetworkManager
                           if (FromNode != null)
                           {
                             if (Network.BufferManager.UnlockElementsInStandBy((BufferManager.ObjToNode.TimestampVector)TimestampVector, FromNode))
-                              ReturnObject = Protocol.StandardAnsware.Ok;
+                              ReturnObject = StandardAnsware.Ok;
                             else
-                              ReturnObject = Protocol.StandardAnsware.Error;
+                              ReturnObject = StandardAnsware.Error;
                           }
                         }
                         else
-                          ReturnObject = Protocol.StandardAnsware.Error;
+                          ReturnObject = StandardAnsware.Error;
 
-                      else if (Rq == Protocol.StandardMessages.AddToBuffer)
+                      else if (Rq == StandardMessages.AddToBuffer)
                         if (Network.BufferManager.AddLocal(XmlObject) == true)
-                          ReturnObject = Protocol.StandardAnsware.Ok;
+                          ReturnObject = StandardAnsware.Ok;
                         else
-                          ReturnObject = Protocol.StandardAnsware.Error;
-                      else if (Rq == Protocol.StandardMessages.ImOffline || Rq == Protocol.StandardMessages.ImOnline)
+                          ReturnObject = StandardAnsware.Error;
+                      else if (Rq == StandardMessages.ImOffline || Rq == StandardMessages.ImOnline)
                         if (Converter.XmlToObject(XmlObject, typeof(Network.Node), out object ObjNode))
                         {
                           var Node = (Network.Node)ObjNode;
-                          ReturnObject = Protocol.StandardAnsware.Ok;
-                          if (Rq == Protocol.StandardMessages.ImOnline)
-                          {
-                            Node.DetectIP();
-                            if (Network.NodeList.Select(x => x.IP == Node.IP && Node.IP != Converter.IpToUint("127.0.0.1")) != null)
-                              ReturnObject = Protocol.StandardAnsware.DuplicateIP;
-                            else
-                            {
-                              if (Network.Protocol.SpeedTest(Node))
-                                lock (Network.NodeList)
-                                {
-                                  Network.NodeList.Add(Node);
-                                  Network.NodeList = Network.NodeList.OrderBy(o => o.Address).ToList();
-                                }
+                          ReturnObject = StandardAnsware.Ok;
+                          if (Rq == StandardMessages.ImOnline)
+                            if (Node.CheckIP() && Node.IP == Converter.IpToUint(FromIP))
+                              if (Network.NodeList.Find(x => x.IP == Node.IP) != null)
+                                ReturnObject = StandardAnsware.DuplicateIP;
                               else
-                                ReturnObject = Protocol.StandardAnsware.TooSlow;
-                            }
-                          }
+                              {
+                                if (Network.Protocol.DecentralizedSpeedTest(Node, out List<SpeedTestResult> SpeedTestResults))
+                                  lock (Network.NodeList)
+                                  {
+                                    // Notifica agli altri nodi che c'è un nuovo nodo
+                                    Network.NodeList.Add(Node);
+                                    Network.NodeList = Network.NodeList.OrderBy(o => o.IP).ToList();
+                                  }
+                                else
+                                  ReturnObject = StandardAnsware.TooSlow;
+                              }
+                            else
+                              ReturnObject = StandardAnsware.IpError;
                         }
                         else
-                          ReturnObject = Protocol.StandardAnsware.Error;
-                      else if (Rq == Protocol.StandardMessages.TestSpeed)
-                        ReturnObject = new string('x', 1048576);
+                          ReturnObject = StandardAnsware.Error;
+                      else if (Rq == StandardMessages.RequestTestSpeed)
+                      {
+                        if (Converter.XmlToObject(XmlObject, typeof(Network.Node), out object ObjNode))
+                        {
+                          var Node = (Network.Node)ObjNode;
+                          ReturnObject = Network.Protocol.SpeedTestSigned(Node);
+                        }
+                        else
+                          ReturnObject = -1;
+                      }
+                      else if (Rq == StandardMessages.TestSpeed)
+                        ReturnObject = new string('x', 131072); // 1/8 of MB (1MB = 1048576)
                       ContentType = "text/xml;charset=utf-8";
                       XmlSerializer xml = new XmlSerializer(ReturnObject.GetType());
                       XmlSerializerNamespaces xmlns = new XmlSerializerNamespaces();
@@ -386,7 +396,7 @@ namespace NetworkManager
         if (RunningCheckInternetConnection == 1)
         {
           CheckInternetConnection.Start();
-          ElapsedCheckInternetConnection();
+          new System.Threading.Thread(() => { ElapsedCheckInternetConnection(); }).Start();
         }
       }
     }

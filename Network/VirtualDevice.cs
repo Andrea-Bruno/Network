@@ -25,7 +25,7 @@ namespace NetworkManager
     /// Simulated internet speed in megabytes per second.
     /// Set this value to zero to simulate the disconnection of the virtual internet network.
     /// </summary>
-    public float NetSpeed = 1;
+    public float NetSpeed = 10;
     public void SetIP(string IP)
     {
       this.IP = Converter.IpToUint(IP);

@@ -6,7 +6,7 @@ namespace NetworkManager
 {
   public static class Utility
   {
-    public static void Log(string Category, int MaxRecord, string ErrorMessage)
+    public static void Log(string Category, string ErrorMessage)
     {
       System.Diagnostics.Debug.WriteLine(Category);
       System.Diagnostics.Debug.Write(ErrorMessage);

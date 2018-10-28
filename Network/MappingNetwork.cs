@@ -66,21 +66,24 @@ namespace NetworkManager
     /// <returns>The list of nodes connected to the level</returns>
     internal List<Node> GetConnections(int Level)
     {
-      return GetConnections(Level, MyX, MyY);
+      return GetConnections(Level, Network.MyNode);
     }
     internal List<Node> GetConnections(int Level, Node Node)
     {
-      GetXY(Node, out int X, out int Y);
-      return GetConnections(Level, X, Y);
-    }
-    private List<Node> GetConnections(int Level, int XNode, int YNode)
-    {
+      // return GetConnections(Level, X, Y);
       int Distance = SquareSide / (int)Math.Pow(3, Level);
       if (Distance < 1)
-        Distance = 1;
+        Distance = 1; int XNode, YNode;
+      if (Node != Network.MyNode)
+        GetXY(Node, out XNode, out YNode);
+      else
+      {
+        XNode = MyX;
+        YNode = MyY;
+      }
       lock (CacheConnections)
       {
-        if (XNode == MyX && YNode == MyY && CacheConnections.TryGetValue(Distance, out List<Node> List))
+        if (Node == Network.MyNode && CacheConnections.TryGetValue(Distance, out List<Node> List))
           return List;
         List = new List<Node>();
         for (int UpDown = -1; UpDown <= 1; UpDown++)
@@ -89,18 +92,19 @@ namespace NetworkManager
             {
               var X = XNode + Distance * LeftRight;
               var Y = YNode + Distance * UpDown;
-              if (X != XNode && Y != YNode)
-              {
                 var Connection = GetNodeAtPosition(X, Y);
-                if (!List.Contains(Connection))
+                if (Connection != Node && !List.Contains(Connection))
                   List.Add(Connection);
-              }
             }
-        if (XNode == MyX && YNode == MyY)
+        if (Node == Network.MyNode)
           CacheConnections.Add(Distance, List);
         return List;
       }
     }
+    //private List<Node> GetConnections(int Level, int XNode, int YNode)
+    //{
+
+    //}
   }
 
 }

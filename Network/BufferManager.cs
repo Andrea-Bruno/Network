@@ -35,9 +35,9 @@ namespace NetworkManager
     /// </summary>
     /// <param name="Object">Object to send</param>
     /// <returns></returns>
-    public bool AddToSaredBuffer(object Object)
+    public Protocol.StandardAnsware AddToSaredBuffer(object Object)
     {
-      return Network.Protocol.AddToSharedBuffer(Network.GetRandomNode(), Object) == Protocol.StandardAnsware.Ok;
+      return Network.Protocol.AddToSharedBuffer(Network.GetRandomNode(), Object);
     }
     private System.Timers.Timer BufferTimer;
     private void ToDoEverySec()
