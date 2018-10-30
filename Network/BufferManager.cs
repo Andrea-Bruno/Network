@@ -13,22 +13,22 @@ namespace NetworkManager
   /// </summary>
   internal class BufferManager
   {
-    public BufferManager(Network Network)
+    public BufferManager(Network network)
     {
-      this.Network = Network;
-      Spooler = new Spooler(Network);
-      BufferTimer = new System.Timers.Timer(1000) { AutoReset = true, Enabled = true };
-      BufferTimer.Elapsed += (sender, e) => ToDoEverySec();
+      _network = network;
+      _spooler = new Spooler(network);
+      _bufferTimer = new System.Timers.Timer(1000) { AutoReset = true, Enabled = true };
+      _bufferTimer.Elapsed += (sender, e) => ToDoEverySec();
 
-      NewStats = new System.Timers.Timer(43200000) { AutoReset = true, Enabled = true };//Every 12h
-      NewStats.Elapsed += (sender, e) => NewStatsElapsed();
+      _newStats = new System.Timers.Timer(43200000) { AutoReset = true, Enabled = true };//Every 12h
+      _newStats.Elapsed += (sender, e) => NewStatsElapsed();
 
     }
-    private Network Network;
+    private readonly Network _network;
     /// <summary>
     /// The spooler contains the logic that allows synchronization of data on the peer2peer network
     /// </summary>
-    private Spooler Spooler;
+    private readonly Spooler _spooler;
 
     /// <summary>
     /// Send an object to the network to be inserted in the shared buffer
@@ -37,58 +37,104 @@ namespace NetworkManager
     /// <returns></returns>
     public Protocol.StandardAnsware AddToSaredBuffer(object Object)
     {
-      return Network.Protocol.AddToSharedBuffer(Network.GetRandomNode(), Object);
+      return _network.Protocol.AddToSharedBuffer(_network.GetRandomNode(), Object);
     }
-    private System.Timers.Timer BufferTimer;
+    private readonly System.Timers.Timer _bufferTimer;
     private void ToDoEverySec()
     {
       //var Buffer = BufferManager.Buffer;
       lock (Buffer)
       {
-        var ToRemove = new List<ElementBuffer>();
-        var ThisTime = Network.Now;
+        var toRemove = new List<ElementBuffer>();
+        var thisTime = _network.Now;
         foreach (var item in Buffer)
         {
-          if ((ThisTime - new DateTime(item.Timestamp)) > Network.MappingNetwork.NetworkSyncTimeSpan)
+          if ((thisTime - new DateTime(item.Element.Timestamp)) > _network.MappingNetwork.NetworkSyncTimeSpan)
           {
-            ToRemove.Add(item);
-            var ObjectName = Utility.GetObjectName(item.XmlObject);
-            if (BufferCompletedAction.TryGetValue(ObjectName, out SyncData Action))
-              Action.Invoke(item.XmlObject, item.Timestamp);
-            //foreach (SyncData Action in BufferCompletedAction)
-            //  Action.Invoke(item.XmlObject, item.Timestamp);
+            toRemove.Add(item);
+            var objectName = Utility.GetObjectName(item.Element.XmlObject);
+            OnReceiveObjectFromBuffer(objectName, item.Element.XmlObject, item.Element.Timestamp);
           }
           else
             break;//because the beffer is sorted by Timespan
         }
-        foreach (var item in ToRemove)
+        foreach (var item in toRemove)
           Buffer.Remove(item);
       }
+    }
+    private void OnReceiveObjectFromBuffer(string objectName, string xmlObject, long timestamp)
+    {
+      if (objectName == "NodeOnlineNotification")
+        if (Converter.XmlToObject(xmlObject, typeof(Protocol.NodeOnlineNotification), out var obj))
+        {
+          var nodeOnlineNotification = (Protocol.NodeOnlineNotification)(obj);
+          if (nodeOnlineNotification.Node.CheckIp())
+          {
+            var invalid = false;
+            var connections = new List<Node>();
+            Node nodeAtLevel0 = null;
+            foreach (var item in nodeOnlineNotification.Signatures)
+            {
+              var nodeOfSignature = _network.CurrentNodes().Find(x => x.Ip == item.NodeIp);
+              if (nodeOfSignature == null)
+              {
+                invalid = true;
+                break;
+              }
+              if (nodeAtLevel0 == null)
+                nodeAtLevel0 = nodeOfSignature;
+              else
+                connections.Add(nodeOfSignature);
+              if (item.VerifySignature(nodeOfSignature, nodeOnlineNotification.Node.Ip)) continue;
+              invalid = true;
+              break;
+            }
+            if (!invalid)
+              if (_network.ValidateConnectionAtLevel0(nodeAtLevel0, connections))
+                _network.AddNode(nodeOnlineNotification.Node, timestamp);
+          }
+        }
+
+      if (_bufferCompletedAction.TryGetValue(objectName, out var action))
+        action.Invoke(xmlObject, timestamp);
+      //foreach (SyncData Action in BufferCompletedAction)
+      //  Action.Invoke(item.XmlObject, item.Timestamp);
     }
     /// <summary>
     /// Insert the object in the local buffer to be synchronized
     /// XmlObject is a new element inserted by an external user
     /// </summary>
-    /// <param name="XmlObject">Serialized object im format xml</param>
+    /// <param name="XmlObject">Object im format xml</param>
     /// <returns></returns>
-    internal bool AddLocal(string XmlObject)
+    internal bool AddLocal(object Object)
     {
-      if (string.IsNullOrEmpty(XmlObject))
+      var xmlObject = Converter.ObjectToXml(Object);
+      return AddLocal(xmlObject);
+    }
+    /// <summary>
+    /// Insert the object in the local buffer to be synchronized
+    /// XmlObject is a new element inserted by an external user
+    /// </summary>
+    /// <param name="xmlObject">Serialized object im format xml</param>
+    /// <returns></returns>
+    internal bool AddLocal(string xmlObject)
+    {
+      if (string.IsNullOrEmpty(xmlObject))
         return false;
       else
       {
-        long Timestamp = Network.Now.Ticks;
+        //long Timestamp = Network.Now.Ticks;
         //var Element = new Element() { Timestamp = Timestamp, XmlObject = XmlObject };
         //At level 0 the timestamp will be assigned before transmission to the node in order to reduce the difference with the timestamp on the node
-        var Element = new Element() { XmlObject = XmlObject };
+        var element = new Element() { XmlObject = xmlObject };
         lock (Buffer)
         {
-          var ElementBuffer = (ElementBuffer)Element;
-          ElementBuffer.Levels.Add(1);
-          Buffer.Add(ElementBuffer);
+          var elementBuffer = new ElementBuffer(element);
+          elementBuffer.Levels.Add(1);
+          Buffer.Add(elementBuffer);
           SortBuffer();
         }
-        Spooler.DataDelivery();
+        _spooler.DataDelivery();
         return true;
       }
     }
@@ -96,126 +142,123 @@ namespace NetworkManager
     /// <summary>
     /// In this waiting list all the objects awaiting the timestamp signature are inserted by all the nodes assigned to the first level distribution
     /// </summary>
-    private readonly List<ObjToNode> StandByList = new List<ObjToNode>();
+    private readonly List<ObjToNode> _standByList = new List<ObjToNode>();
     /// <summary>
     /// Insert the objects in the local buffer to be synchronized
     /// The elements come from other nodes
     /// </summary>
-    /// <param name="Elements">Elements come from other nodes</param>
-    internal ObjToNode.TimestampVector AddLocalFromNode(List<ObjToNode> Elements, Node FromNode)
+    /// <param name="elements">Elements come from other nodes</param>
+    internal ObjToNode.TimestampVector AddLocalFromNode(List<ObjToNode> elements, Node fromNode)
     {
-      ObjToNode.TimestampVector Result = null;
+      ObjToNode.TimestampVector result = null;
       lock (Buffer)
       {
-        var Count = Buffer.Count;
-        var ThisTime = Network.Now;
-        foreach (var ObjToNode in Elements)
+        var count = Buffer.Count;
+        var thisTime = _network.Now;
+        foreach (var objToNode in elements)
         {
-          var TimePassedFromInsertion = ThisTime - new DateTime(ObjToNode.Timestamp);
-          UpdateStats(TimePassedFromInsertion);
-          if ((TimePassedFromInsertion) <= Network.MappingNetwork.NetworkSyncTimeSpan)
+          var timePassedFromInsertion = thisTime - new DateTime(objToNode.Timestamp);
+          UpdateStats(timePassedFromInsertion);
+          if ((timePassedFromInsertion) <= _network.MappingNetwork.NetworkSyncTimeSpan)
           {
-            var Level = ObjToNode.Level + 1;
-            var ElementBuffer = Buffer.Find((x) => x.Timestamp == ObjToNode.Timestamp && x.XmlObject == ObjToNode.XmlObject);
-            if (ElementBuffer == null)
+            var level = objToNode.Level + 1;
+            var elementBuffer = Buffer.Find((x) => x.Element.Timestamp == objToNode.Timestamp && x.Element.XmlObject == objToNode.XmlObject);
+            if (elementBuffer == null)
             {
-              UpdateStats(TimePassedFromInsertion, true);
-              if (ObjToNode.Level == 1)
+              UpdateStats(timePassedFromInsertion, true);
+              if (objToNode.Level == 1)
               {
                 // This is an object that is just inserted, so you must certify the timestamp and send the certificate to the node that took delivery of the object.
                 // The object must then be put on standby until the node sends all the certificates for the timestamp.
-                if (ObjToNode.CheckNodeThatStartedDistributingTheObject(FromNode))
+                if (objToNode.CheckNodeThatStartedDistributingTheObject(fromNode))
                 {
-                  var Signature = ObjToNode.CreateTheSignatureForTheTimestamp(Network.MyNode, Network.Now);
-                  StandByList.Add(ObjToNode);
-                  if (Result == null)
-                    Result = new ObjToNode.TimestampVector();
-                  Result.SignedTimestamp.Add(ObjToNode.ShortHash, Signature);
+                  var signature = objToNode.CreateTheSignatureForTheTimestamp(_network.MyNode, _network.Now);
+                  _standByList.Add(objToNode);
+                  if (result == null)
+                    result = new ObjToNode.TimestampVector();
+                  result.SignedTimestamp.Add(objToNode.ShortHash, signature);
                 }
               }
               else
               {
-                ElementBuffer = (ElementBuffer)(Element)ObjToNode;
-                Buffer.Add(ElementBuffer);
+                elementBuffer = new ElementBuffer(objToNode.GetElement);
+                Buffer.Add(elementBuffer);
               }
             }
-            lock (ElementBuffer.Levels)
-              if (!ElementBuffer.Levels.Contains(Level))
-                ElementBuffer.Levels.Add(Level);
-            lock (ElementBuffer.SendedNode)
-              ElementBuffer.SendedNode.Add(FromNode);
-            ElementBuffer.Received++;
+            lock (elementBuffer.Levels)
+              if (!elementBuffer.Levels.Contains(level))
+                elementBuffer.Levels.Add(level);
+            lock (elementBuffer.SendedNode)
+              elementBuffer.SendedNode.Add(fromNode);
+            elementBuffer.Received++;
           }
           else
           {
             //A dishonest node has started a fork through a fake timestamp?
-            Stats24h.ElementsArrivedOutOfTime++;
-            Stats12h.ElementsArrivedOutOfTime++;
+            Stats24H.ElementsArrivedOutOfTime++;
+            _stats12H.ElementsArrivedOutOfTime++;
           }
         }
-        if (Count != Buffer.Count)
-        {
-          SortBuffer();
-          Spooler.DataDelivery();
-        }
+
+        if (count == Buffer.Count) return result;
+        SortBuffer();
+        _spooler.DataDelivery();
       }
-      return Result;
+      return result;
     }
-    internal bool UnlockElementsInStandBy(ObjToNode.TimestampVector SignedTimestamps, Node FromNode)
+    internal bool UnlockElementsInStandBy(ObjToNode.TimestampVector signedTimestamps, Node fromNode)
     {
       lock (Buffer)
       {
-        var Count = Buffer.Count();
-        var Remove = new List<ObjToNode>();
-        lock (StandByList)
+        var count = Buffer.Count();
+        var remove = new List<ObjToNode>();
+        lock (_standByList)
         {
-          foreach (var ObjToNode in StandByList)
-            if (SignedTimestamps.SignedTimestamp.TryGetValue(ObjToNode.ShortHash, out string Signatures))
+          foreach (var objToNode in _standByList)
+            if (signedTimestamps.SignedTimestamp.TryGetValue(objToNode.ShortHash, out var signatures))
             {
-              Remove.Add(ObjToNode);
-              ObjToNode.SignedTimestamp = Signatures;
-              if (ObjToNode.CheckSignedTimestamp(Network) == ObjToNode.CheckSignedTimestampResult.Ok)
+              remove.Add(objToNode);
+              objToNode.TimestampSignature = signatures;
+              if (objToNode.CheckSignedTimestamp(_network) == ObjToNode.CheckSignedTimestampResult.Ok)
               {
-                Buffer.Add((ElementBuffer)(Element)ObjToNode);
+                Buffer.Add(new ElementBuffer(objToNode.GetElement));
               }
             }
-          foreach (var item in Remove)
-            StandByList.Remove(item);
+          foreach (var item in remove)
+            _standByList.Remove(item);
         }
-        if (Count != Buffer.Count())
-        {
-          SortBuffer();
-          Spooler.DataDelivery();
-        }
+        if (count == Buffer.Count()) return true;
+        SortBuffer();
+        _spooler.DataDelivery();
       }
       return true;
     }
-    private void UpdateStats(TimeSpan Value, bool FirstAdd = false)
+    private void UpdateStats(TimeSpan value, bool firstAdd = false)
     {
-      Stats24h.AddValue(Value, FirstAdd);
-      Stats12h.AddValue(Value, FirstAdd);
+      Stats24H.AddValue(value, firstAdd);
+      _stats12H.AddValue(value, firstAdd);
     }
-    private System.Timers.Timer NewStats;
+    private readonly System.Timers.Timer _newStats;
     private void NewStatsElapsed()
     {
-      Stats24h = Stats12h;
-      Stats12h = new Statistics();
+      Stats24H = _stats12H;
+      _stats12H = new Statistics();
     }
-    internal Statistics Stats24h = new Statistics();
-    private Statistics Stats12h = new Statistics();
+    internal Statistics Stats24H = new Statistics();
+    private Statistics _stats12H = new Statistics();
     internal class Statistics
     {
-      internal void AddValue(TimeSpan Value, bool FirstAdd)
+      internal void AddValue(TimeSpan value, bool firstAdd)
       {
         ReceivedElements++;
-        if (FirstAdd)
+        if (firstAdd)
         {
-          MaximumArrivalTimeElement = Value;
-          if (Value > MaximumArrivalTimeElement)
+          MaximumArrivalTimeElement = value;
+          if (value > MaximumArrivalTimeElement)
             ReceivedUnivocalElements++;
         }
-        if (Value > NetworkLatency)
-          NetworkLatency = Value;
+        if (value > NetworkLatency)
+          NetworkLatency = value;
       }
       internal int ReceivedElements = 0;
       internal int ReceivedUnivocalElements = 0;
@@ -223,164 +266,37 @@ namespace NetworkManager
       internal TimeSpan MaximumArrivalTimeElement; /// Maximum time to update the node (from the first node)
       internal TimeSpan NetworkLatency; /// Maximum time to update the node (from all node)
     }
-    void SortBuffer()
+
+    private void SortBuffer()
     {
-      Buffer.OrderBy(x => x.XmlObject);//Used for the element whit same Timestamp
-      Buffer.OrderBy(x => x.Timestamp);
+      Buffer = Buffer.OrderBy(x => x.Element.XmlObject).ToList();//Used for the element whit same Timestamp
+      Buffer = Buffer.OrderBy(x => x.Element.Timestamp).ToList();
     }
     internal List<ElementBuffer> Buffer = new List<ElementBuffer>();
-    internal class ElementBuffer : Element
+    internal class ElementBuffer
     {
+      public ElementBuffer(Element element)
+      {
+        Element = element;
+      }
+      public Element Element;
       public List<Node> SendedNode = new List<Node>();
       public int Received;
       public List<int> Levels = new List<int>();
     }
-    public class Element
-    {
-      public long Timestamp;
-      public string XmlObject;
-    }
-    public class ObjToNode : Element
-    {
-      public int Level;
-      public string SignedTimestamp;
-      /// <summary>
-      /// Class used exclusively to transmit the timestamp certificates to the node who sent the object to be signed
-      /// </summary>
-      public class TimestampVector
-      {
-        // "int" is the short hash of ObjToNode and "string" is the SignedTimestamp for the single ObjToNode
-        public Dictionary<int, string> SignedTimestamp = new Dictionary<int, string>();
-      }
-      internal int ShortHash;
-      private byte[] Hash()
-      {
-        var Data = BitConverter.GetBytes(Timestamp).Concat(Converter.StringToByteArray(XmlObject)).ToArray();
-        System.Security.Cryptography.HashAlgorithm hashType = new System.Security.Cryptography.SHA256Managed();
-        byte[] hashBytes = hashType.ComputeHash(Data);
-        ShortHash = hashBytes.GetHashCode();
-        return hashBytes;
-      }
-      /// <summary>
-      /// Check the node that sent this object, have assigned a correct timestamp, if so it generates its own signature.
-      /// </summary>
-      /// <param name="MyNode">Your own Node</param>
-      /// <returns>Returns the signature if the timestamp assigned by the node is correct, otherwise null</returns>
-      internal string CreateTheSignatureForTheTimestamp(Node MyNode, DateTime Now )
-      {
-        var ThisMoment = Now;
-        var DT = new DateTime(Timestamp);
-        var Margin = 0.5; // Calculates a margin because the clocks on the nodes may not be perfectly synchronized
-        if (ThisMoment >= DT.AddSeconds(-Margin))
-        {
-          var MaximumTimeToTransmitTheDataOnTheNode = 2; // In seconds
-          if (ThisMoment <= DT.AddSeconds(MaximumTimeToTransmitTheDataOnTheNode + Margin))
-          {
-            // Ok, I can certify the date and time
-            return GetTimestamp(MyNode);
-          }
-        }
-        return null;
-      }
-      private string GetTimestamp(Node Node)
-      {
-        var IpNode = BitConverter.GetBytes(Node.IP);
-        var SignedTimestamp = Node.RSA.SignHash(Hash(), System.Security.Cryptography.CryptoConfig.MapNameToOID("SHA256"));
-        return Convert.ToBase64String(IpNode.Concat(SignedTimestamp).ToArray());
-      }
-      internal void AddFirstTimestamp(Node NodeLevel0, long Timestamp)
-      {
-        this.Timestamp = Timestamp;
-        this.SignedTimestamp = GetTimestamp(NodeLevel0);
-      }
-      internal enum CheckSignedTimestampResult { Ok, NodeThatPutTheSignatureNotFound, InvalidSignature, NonCompliantNetworkConfiguration }
-      /// <summary>
-      /// Check if all the nodes responsible for distributing this data have put their signature on the timestamp
-      /// </summary>
-      /// <param name="Network"></param>
-      /// <param name="CurrentNodeList"></param>
-      /// <param name="NodesRemoved"></param>
-      /// <returns>Result of the operation</returns>
-      internal CheckSignedTimestampResult CheckSignedTimestamp(Network Network)
-      {
-        var CurrentNodeList = Network.NodeList;
-        var NodesRemoved = new List<Node>(); //=============== sistemare questo valore e finire ===================================
-        var LenT = 30;
-        var SignedTimestamps = Convert.FromBase64String(SignedTimestamp);
-        var TS = new List<Byte[]>();
-        Node FirstNode = null;
-        var Nodes = new List<Node>();
-        do
-        {
-          var Timestamp = SignedTimestamps.Take(LenT).ToArray();
-          TS.Add(Timestamp);
-          SignedTimestamps = SignedTimestamps.Skip(LenT).ToArray();
-        } while (SignedTimestamps.Count() != 0);
-        byte[] HashBytes = Hash();
-        foreach (var SignedTS in TS)
-        {
-          ReadSignedTimespan(SignedTS, out uint IpNode, out byte[] Signature);
-          var Node = CurrentNodeList.Find((x) => x.IP == IpNode);
-          if (Node == null)
-            Node = NodesRemoved.Find((x) => x.IP == IpNode);
-          if (FirstNode == null)
-            FirstNode = Node;
-          if (Node == null)
-          {
-            return CheckSignedTimestampResult.NodeThatPutTheSignatureNotFound;
-          }
-          else
-          {
-            Nodes.Add(Node);
-            if (!Node.RSA.VerifyHash(HashBytes, System.Security.Cryptography.CryptoConfig.MapNameToOID("SHA256"), Signature))
-            {
-              return CheckSignedTimestampResult.InvalidSignature;
-            }
-          }
-        }
-        var Connections = Network.MappingNetwork.GetConnections(1, FirstNode);
-        if (Connections.Count != Nodes.Count)
-          return CheckSignedTimestampResult.NonCompliantNetworkConfiguration;
-        else
-        {
-          foreach (var item in Connections)
-          {
-            if (!Nodes.Contains(item))
-            {
-              return CheckSignedTimestampResult.NonCompliantNetworkConfiguration;
-            }
-          }
-        }
-        return CheckSignedTimestampResult.Ok;
-      }
-      internal bool CheckNodeThatStartedDistributingTheObject(Node FromNode)
-      {
-        ReadSignedTimespan(Convert.FromBase64String(SignedTimestamp), out uint IpNode, out byte[] Signature);
-        if (FromNode.IP != IpNode)
-          return false;
-        if (!FromNode.RSA.VerifyHash(Hash(), System.Security.Cryptography.CryptoConfig.MapNameToOID("SHA256"), Signature))
-          return false;
-        return true;
-      }
-      private static void ReadSignedTimespan(byte[] SignedTimestamp, out uint IpNode, out byte[] Signature)
-      {
-        IpNode = BitConverter.ToUInt32(SignedTimestamp, 0);
-        Signature = SignedTimestamp.Skip(4).ToArray();
-      }
-    }
     /// <summary>
     /// Add a action used to local sync the objects coming from the buffer
     /// </summary>
-    /// <param name="Action">Action to execute for every object</param>
-    /// <param name="ForObjectName">Indicates what kind of objects will be treated by this action</param>
-    public bool AddSyncDataAction(SyncData Action, string ForObjectName)
+    /// <param name="action">Action to execute for every object</param>
+    /// <param name="forObjectName">Indicates what kind of objects will be treated by this action</param>
+    public bool AddSyncDataAction(SyncData action, string forObjectName)
     {
-      if (BufferCompletedAction.ContainsKey(ForObjectName))
+      if (_bufferCompletedAction.ContainsKey(forObjectName))
         return false;
-      BufferCompletedAction.Add(ForObjectName, Action);
+      _bufferCompletedAction.Add(forObjectName, action);
       return true;
     }
-    private Dictionary<string, SyncData> BufferCompletedAction = new Dictionary<string, SyncData>();
+    private readonly Dictionary<string, SyncData> _bufferCompletedAction = new Dictionary<string, SyncData>();
   }
 
 }

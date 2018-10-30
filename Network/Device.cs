@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Data.SqlTypes;
 using System.Linq;
 using System.Text;
 using System.Xml.Serialization;
@@ -9,61 +10,61 @@ namespace NetworkManager
 {
   public class Device
   {
-    /// <summary>
-    /// Returns the list of virtual devices already initialized, and the real device if already initialized
-    /// </summary>
-    /// <param name="VirtualDevice"></param>
-    public Device(VirtualDevice VirtualDevice)
+    public Device(VirtualDevice virtualDevice)
     {
       OnlineDetection = new OnlineDetectionClass(this);
-      if (VirtualDevice != null)
+      if (virtualDevice != null)
       {
-        BD = BaseDevices.Find(x => x.VirtualDevice == VirtualDevice);
-        if (BD == null)
-          BD = new BaseDevice();
-        VirtualDevice.Device = BD;
-        this.VirtualDevice = VirtualDevice;
+        _bd = BaseDevices.Find(x => x.VirtualDevice == virtualDevice);
+        if (_bd == null)
+          _bd = new BaseDevice();
+        virtualDevice.Device = _bd;
+        VirtualDevice = virtualDevice;
       }
       else
       {
-        if (RealDevice == null)
-          RealDevice = new BaseDevice();
-        BD = RealDevice;
+        if (_realDevice == null)
+          _realDevice = new BaseDevice();
+        _bd = _realDevice;
       }
-      OnReceivesHttpRequest = BD.OnReceivesHttpRequest;
-      if (!BaseDevices.Contains(BD))
-        BaseDevices.Add(BD);
+      OnReceivesHttpRequest = _bd.OnReceivesHttpRequest;
+      if (!BaseDevices.Contains(_bd))
+        BaseDevices.Add(_bd);
     }
-    public static VirtualDevice FindDeviceByAddress(string Address)
+    public static VirtualDevice FindDeviceByAddress(string address)
     {
-      Uri uriAddress = new Uri(Address);
-      var Domain = uriAddress.GetLeftPart(UriPartial.Authority);
-      return VirtualDevices.Find(x => x.Address == Domain);
+      var uriAddress = new Uri(address);
+      var domain = uriAddress.GetLeftPart(UriPartial.Authority);
+      return VirtualDevices.Find(x => x.Address == domain);
     }
+    /// <summary>
+    /// Returns the list of virtual devices already initialized, and the real device if already initialized
+    /// </summary>
     public static List<VirtualDevice> VirtualDevices
     {
       get
       {
-        var List = new List<VirtualDevice>();
-        foreach (var BaseDevice in BaseDevices)
+        var list = new List<VirtualDevice>();
+        foreach (var baseDevice in BaseDevices)
         {
-          List.Add(BaseDevice.VirtualDevice);
+          list.Add(baseDevice.VirtualDevice);
         }
-        return List;
+        return list;
       }
     }
     internal static List<BaseDevice> BaseDevices = new List<BaseDevice>();
-    private readonly BaseDevice BD;
-    internal List<Network> Networks { get { return BD.Networks; } }
-    public string MachineName { get { return BD.MachineName; } }
+    private readonly BaseDevice _bd;
+    internal List<Network> Networks => _bd.Networks;
+    public string MachineName => _bd.MachineName;
+
     /// <summary>
     /// If the internet works correctly it returns "true". If the auto detect realizes that there is no internet connection then it returns "false".
     /// In this case, auto detect will continue to monitor the network and this function will return "true" as soon as the connection returns.
     /// </summary>
-    public bool IsOnline { get { return BD._IsOnline; } internal set { BD._IsOnline = value; } }
-    internal DateTime Now { get { return BD.Now(); } }
-    internal VirtualDevice VirtualDevice { get { return BD.VirtualDevice; } set { BD.VirtualDevice = value; } }
-    private static BaseDevice RealDevice;
+    public bool IsOnline { get => _bd.IsOnline; internal set => _bd.IsOnline = value; }
+    internal DateTime Now => _bd.Now();
+    internal VirtualDevice VirtualDevice { get => _bd.VirtualDevice; set => _bd.VirtualDevice = value; }
+    private static BaseDevice _realDevice;
     internal class BaseDevice
     {
       public List<Network> Networks = new List<Network>();
@@ -75,8 +76,12 @@ namespace NetworkManager
           return result;
         }
       }
-      internal bool _IsOnline = true;
-      public bool IsOnline { get { return _IsOnline; } }
+      public bool IsOnline { get; internal set; } = true;
+
+      //internal bool _isOnline = true;
+      //public bool IsOnline { get => _isOnline;
+      //  private set { _isOnline = value; }
+      //}
       internal DateTime Now()
       {
         return DateTime.UtcNow;
@@ -89,48 +94,46 @@ namespace NetworkManager
       /// <param name="Form"></param>
       /// <param name="FromIP"></param>
       /// <returns></returns>
-      public WebResponse WebServer(WebRequest Request)
+      public WebResponse WebServer(WebRequest request)
       {
         {
-          WebResponse Response = null;
-          if (VirtualDevice.IsOnline)
+          WebResponse response = null;
+          if (!VirtualDevice.IsOnline) return null; //null if is offline
+          _currentWebRequest += 1;
+          if (_currentWebRequest > 5)
           {
-            CurrentWebRequest += 1;
-            if (CurrentWebRequest > 5)
-            {
-              Response = new WebResponse(null, null, 429, "Too Many Requests");
-            }
-            else
-            {
-              using (System.IO.Stream Stream = new System.IO.MemoryStream())
-                if (OnReceivesHttpRequest(Request.QueryString, Request.Form, Request.FromIP, out string ContentType, Stream))
-                {
-                  float MB = Stream.Length / 1048576f;
-                  // It is empirical but excellent for simulating the network speed as set by the Virtual Server
-                  int PauseMS = (int)(MB / VirtualDevice.NetSpeed * 1000 * CurrentWebRequest);
-                  System.Threading.Thread.Sleep(PauseMS);
-                  Stream.Position = 0;
-                  using (var streamReader = new System.IO.StreamReader(Stream))
-                    Response = new WebResponse(streamReader.ReadToEnd(), ContentType, 200, "OK");
-                }
-            }
-            CurrentWebRequest -= 1;
+            response = new WebResponse(null, null, 429, "Too Many Requests");
           }
-          return Response; //null if is offline
+          else
+          {
+            using (System.IO.Stream stream = new System.IO.MemoryStream())
+              if (OnReceivesHttpRequest(request.QueryString, request.Form, request.FromIp, out var contentType, stream))
+              {
+                var mb = stream.Length / 1048576f;
+                // It is empirical but excellent for simulating the network speed as set by the Virtual Device
+                var pauseMs = (int)(mb / VirtualDevice.NetSpeed * 1000 * _currentWebRequest);
+                System.Threading.Thread.Sleep(pauseMs);
+                stream.Position = 0;
+                using (var streamReader = new System.IO.StreamReader(stream))
+                  response = new WebResponse(streamReader.ReadToEnd(), contentType, 200, "OK");
+              }
+          }
+          _currentWebRequest -= 1;
+          return response; //null if is offline
         }
       }
-      private int CurrentWebRequest = 0;
+      private int _currentWebRequest = 0;
       public class WebResponse
       {
-        internal WebResponse(string Text, string ContentType, int StatusCode, string StatusDescription)
+        internal WebResponse(string text, string contentType, int statusCode, string statusDescription)
         {
-          this.Text = Text;
-          this.StatusCode = StatusCode;
-          this.StatusDescription = StatusDescription;
-          if (ContentType != null)
-            Headers.Add("Content-Type", ContentType);
+          Text = text;
+          StatusCode = statusCode;
+          StatusDescription = statusDescription;
+          if (contentType != null)
+            Headers.Add("Content-Type", contentType);
         }
-        public string Status { get { return StatusCode.ToString() + " " + StatusDescription; } }
+        public string Status => StatusCode.ToString() + " " + StatusDescription;
         public readonly int StatusCode;
         public readonly string StatusDescription;
         public readonly string Text;
@@ -138,176 +141,175 @@ namespace NetworkManager
       }
       public class WebRequest
       {
-        public WebRequest(System.Collections.Specialized.NameValueCollection QueryString, System.Collections.Specialized.NameValueCollection Form, string FromIP)
+        public WebRequest(System.Collections.Specialized.NameValueCollection queryString, System.Collections.Specialized.NameValueCollection form, string fromIp)
         {
-          this.QueryString = QueryString;
-          this.Form = Form;
-          this.FromIP = FromIP;
+          QueryString = queryString;
+          Form = form;
+          FromIp = fromIp;
         }
         public readonly System.Collections.Specialized.NameValueCollection QueryString;
         public readonly System.Collections.Specialized.NameValueCollection Form;
-        public readonly string FromIP;
-        public string Method { get { return Form == null ? "GET" : "POST"; } }
+        public readonly string FromIp;
+        public string Method => Form == null ? "GET" : "POST";
       }
       /// <summary>
       /// This procedure receives an http request and processes the response based on the input received and the protocol
       /// </summary>
-      /// <param name="QueryString">QueryString Collection</param>
-      /// <param name="Form">Form Collection</param>
-      /// <param name="FromIP">the IP of who generated the request</param>
-      /// <param name="ContentType">The ContentType of the answer</param>
-      /// <param name="OutputStream">The stream to which the reply will be sent</param>
+      /// <param name="queryString">QueryString Collection</param>
+      /// <param name="form">Form Collection</param>
+      /// <param name="fromIp">the IP of who generated the request</param>
+      /// <param name="contentType">The ContentType of the answer</param>
+      /// <param name="outputStream">The stream to which the reply will be sent</param>
       /// <returns>True if the operation was successful</returns>
-      public bool OnReceivesHttpRequest(System.Collections.Specialized.NameValueCollection QueryString, System.Collections.Specialized.NameValueCollection Form, string FromIP, out string ContentType, System.IO.Stream OutputStream)
+      public bool OnReceivesHttpRequest(System.Collections.Specialized.NameValueCollection queryString, System.Collections.Specialized.NameValueCollection form, string fromIp, out string contentType, System.IO.Stream outputStream)
       {
-        var NetworkName = QueryString["network"];
-        foreach (var Network in Networks)
+        var networkName = queryString["network"];
+        foreach (var network in Networks)
         {
-          if (NetworkName == Network.NetworkName)
+          if (networkName != network.NetworkName) continue;
+          var appName = queryString["app"];
+          var toUser = queryString["touser"];
+          var fromUser = queryString["fromuser"];
+          var post = queryString["post"];
+          var request = queryString["request"];
+          int.TryParse(queryString["sectimeout"], out var secTimeout);
+          int.TryParse(queryString["secwaitanswer"], out var secWaitAnswer);
+
+          string xmlObject = null;
+          if (form["object"] != null)
+            xmlObject = Converter.Base64ToString(form["object"]);
+          if (toUser != MachineName && !toUser.StartsWith(MachineName + ".")) continue;
+          var parts = toUser.Split('.'); // [0]=MachineName, [1]=PluginName
+          string pluginName = null;
+          if (parts.Length > 1)
           {
-            var AppName = QueryString["app"];
-            var ToUser = QueryString["touser"];
-            var FromUser = QueryString["fromuser"];
-            var Post = QueryString["post"];
-            var Request = QueryString["request"];
-            int.TryParse(QueryString["sectimeout"], out int SecTimeout);
-            int.TryParse(QueryString["secwaitanswer"], out int SecWaitAnswer);
-
-            string XmlObject = null;
-            if (Form["object"] != null)
-              XmlObject = Converter.Base64ToString(Form["object"]);
-
-            if (ToUser == MachineName || ToUser.StartsWith(MachineName + "."))
-            {
-              var Parts = ToUser.Split('.'); // [0]=MachineName, [1]=PluginName
-              string PluginName = null;
-              if (Parts.Length > 1)
-              {
-                PluginName = Parts[1];
-              }
-              object ReturnObject = null;
+            pluginName = parts[1];
+          }
+          object returnObject = null;
+#if !DEBUG
               try
               {
-                if (!string.IsNullOrEmpty(PluginName))
+#endif
+          if (!string.IsNullOrEmpty(pluginName))
+          {
+            //foreach (PluginManager.Plugin Plugin in AllPlugins())
+            //{
+            //  if (Plugin.IsEnabled(Setting))
+            //  {
+            //    if (Plugin.Name == PluginName)
+            //    {
+            //      Plugin.PushObject(Post, XmlObject, Form, ReturnObject);
+            //      break;
+            //    }
+            //  }
+            //}
+          }
+          else
+          {
+            if (!string.IsNullOrEmpty(post))//Post is a GetType Name
+            {
+              //Is a object trasmission
+              if (string.IsNullOrEmpty(fromUser))
+                returnObject = "error: no server name setting";
+              else if (network.Protocol.OnReceivingObjectsActions.ContainsKey(post))
+                returnObject = network.Protocol.OnReceivingObjectsActions[post](xmlObject);
+            }
+            if (!string.IsNullOrEmpty(request))
+              //Is a request o object
+            {
+              if (network.Protocol.OnRequestActions.ContainsKey(request))
+                returnObject = network.Protocol.OnRequestActions[request](xmlObject);
+              if (Enum.TryParse(request, out StandardMessages rq))
+              {
+                if (rq == StandardMessages.NetworkNodes)
+                  returnObject = network.NodeList;
+                else if (rq == StandardMessages.GetStats)
                 {
-                  //foreach (PluginManager.Plugin Plugin in AllPlugins())
-                  //{
-                  //  if (Plugin.IsEnabled(Setting))
-                  //  {
-                  //    if (Plugin.Name == PluginName)
-                  //    {
-                  //      Plugin.PushObject(Post, XmlObject, Form, ReturnObject);
-                  //      break;
-                  //    }
-                  //  }
-                  //}
+                  returnObject = new Stats { NetworkLatency = (int)network.BufferManager.Stats24H.NetworkLatency.TotalMilliseconds };
                 }
-                else
-                {
-                  if (!string.IsNullOrEmpty(Post))//Post is a GetType Name
+                else if (rq == StandardMessages.SendElementsToNode)
+                  if (Converter.XmlToObject(xmlObject, typeof(List<ObjToNode>), out var objElements))
                   {
-                    //Is a object trasmission
-                    if (string.IsNullOrEmpty(FromUser))
-                      ReturnObject = "error: no server name setting";
-                    else if (Network.Protocol.OnReceivingObjectsActions.ContainsKey(Post))
-                      ReturnObject = Network.Protocol.OnReceivingObjectsActions[Post](XmlObject);
-                  }
-                  if (!string.IsNullOrEmpty(Request))
-                  //Is a request o object
-                  {
-                    if (Network.Protocol.OnRequestActions.ContainsKey(Request))
-                      ReturnObject = Network.Protocol.OnRequestActions[Request](XmlObject);
-                    if (StandardMessages.TryParse(Request, out StandardMessages Rq))
+                    var uintFromIp = Converter.IpToUint(fromIp);
+                    var fromNode = network.NodeList.Find((x) => x.Ip == uintFromIp);
+                    if (fromNode == null)
                     {
-                      if (Rq == StandardMessages.NetworkNodes)
-                        ReturnObject = Network.NodeList;
-                      else if (Rq == StandardMessages.GetStats)
-                      {
-                        ReturnObject = new Stats { NetworkLatency = (int)Network.BufferManager.Stats24h.NetworkLatency.TotalMilliseconds };
-                      }
-                      else if (Rq == StandardMessages.SendElementsToNode)
-                        if (Converter.XmlToObject(XmlObject, typeof(List<BufferManager.ObjToNode>), out object ObjElements))
-                        {
-                          var UintFromIP = Converter.IpToUint(FromIP);
-                          var FromNode = Network.NodeList.Find((x) => x.IP == UintFromIP);
-                          if (FromNode != null)
-                          {
-                            ReturnObject = Network.BufferManager.AddLocalFromNode((List<BufferManager.ObjToNode>)ObjElements, FromNode);
-                            if (ReturnObject == null)
-                              ReturnObject = StandardAnsware.Ok;
-                          }
-                        }
-                        else
-                          ReturnObject = StandardAnsware.Error;
-
-                      else if (Rq == StandardMessages.SendTimestampSignatureToNode)
-                        if (Converter.XmlToObject(XmlObject, typeof(BufferManager.ObjToNode.TimestampVector), out object TimestampVector))
-                        {
-                          var UintFromIP = Converter.IpToUint(FromIP);
-                          var FromNode = Network.NodeList.Find((x) => x.IP == UintFromIP);
-                          if (FromNode != null)
-                          {
-                            if (Network.BufferManager.UnlockElementsInStandBy((BufferManager.ObjToNode.TimestampVector)TimestampVector, FromNode))
-                              ReturnObject = StandardAnsware.Ok;
-                            else
-                              ReturnObject = StandardAnsware.Error;
-                          }
-                        }
-                        else
-                          ReturnObject = StandardAnsware.Error;
-
-                      else if (Rq == StandardMessages.AddToBuffer)
-                        if (Network.BufferManager.AddLocal(XmlObject) == true)
-                          ReturnObject = StandardAnsware.Ok;
-                        else
-                          ReturnObject = StandardAnsware.Error;
-                      else if (Rq == StandardMessages.ImOffline || Rq == StandardMessages.ImOnline)
-                        if (Converter.XmlToObject(XmlObject, typeof(Network.Node), out object ObjNode))
-                        {
-                          var Node = (Network.Node)ObjNode;
-                          ReturnObject = StandardAnsware.Ok;
-                          if (Rq == StandardMessages.ImOnline)
-                            if (Node.CheckIP() && Node.IP == Converter.IpToUint(FromIP))
-                              if (Network.NodeList.Find(x => x.IP == Node.IP) != null)
-                                ReturnObject = StandardAnsware.DuplicateIP;
-                              else
-                              {
-                                if (Network.Protocol.DecentralizedSpeedTest(Node, out List<SpeedTestResult> SpeedTestResults))
-                                  lock (Network.NodeList)
-                                  {
-                                    // Notifica agli altri nodi che c'è un nuovo nodo
-                                    Network.NodeList.Add(Node);
-                                    Network.NodeList = Network.NodeList.OrderBy(o => o.IP).ToList();
-                                  }
-                                else
-                                  ReturnObject = StandardAnsware.TooSlow;
-                              }
-                            else
-                              ReturnObject = StandardAnsware.IpError;
-                        }
-                        else
-                          ReturnObject = StandardAnsware.Error;
-                      else if (Rq == StandardMessages.RequestTestSpeed)
-                      {
-                        if (Converter.XmlToObject(XmlObject, typeof(Network.Node), out object ObjNode))
-                        {
-                          var Node = (Network.Node)ObjNode;
-                          ReturnObject = Network.Protocol.SpeedTestSigned(Node);
-                        }
-                        else
-                          ReturnObject = -1;
-                      }
-                      else if (Rq == StandardMessages.TestSpeed)
-                        ReturnObject = new string('x', 131072); // 1/8 of MB (1MB = 1048576)
-                      ContentType = "text/xml;charset=utf-8";
-                      XmlSerializer xml = new XmlSerializer(ReturnObject.GetType());
-                      XmlSerializerNamespaces xmlns = new XmlSerializerNamespaces();
-                      xmlns.Add(string.Empty, string.Empty);
-                      xml.Serialize(OutputStream, ReturnObject, xmlns);
-                      return true;
+                      returnObject = StandardAnsware.Unauthorized;
+                      System.Diagnostics.Debugger.Break();
+                    }
+                    else
+                    {
+                      returnObject = network.BufferManager.AddLocalFromNode((List<ObjToNode>)objElements, fromNode);
+                      if (returnObject == null)
+                        returnObject = StandardAnsware.Ok;
                     }
                   }
+                  else
+                    returnObject = StandardAnsware.Error;
+                else if (rq == StandardMessages.SendTimestampSignatureToNode)
+                  if (Converter.XmlToObject(xmlObject, typeof(ObjToNode.TimestampVector), out var timestampVector))
+                  {
+                    var uintFromIp = Converter.IpToUint(fromIp);
+                    var fromNode = network.NodeList.Find((x) => x.Ip == uintFromIp);
+                    if (fromNode != null)
+                    {
+                      if (network.BufferManager.UnlockElementsInStandBy((ObjToNode.TimestampVector)timestampVector, fromNode))
+                        returnObject = StandardAnsware.Ok;
+                      else
+                        returnObject = StandardAnsware.Error;
+                    }
+                  }
+                  else
+                    returnObject = StandardAnsware.Error;
+                else if (rq == StandardMessages.AddToBuffer)
+                  if (network.BufferManager.AddLocal(xmlObject) == true)
+                    returnObject = StandardAnsware.Ok;
+                  else
+                    returnObject = StandardAnsware.Error;
+                else if (rq == StandardMessages.ImOffline || rq == StandardMessages.ImOnline)
+                  if (Converter.XmlToObject(xmlObject, typeof(Node), out var objNode))
+                  {
+                    var node = (Node)objNode;
+                    returnObject = StandardAnsware.Ok;
+                    if (rq == StandardMessages.ImOnline)
+                      if (node.CheckIp() && node.Ip == Converter.IpToUint(fromIp))
+                        if (network.NodeList.Find(x => x.Ip == node.Ip) != null)
+                          returnObject = StandardAnsware.DuplicateIp;
+                        else
+                        {
+                          if (network.Protocol.DecentralizedSpeedTest(node, out var speedTestResults))
+                            network.Protocol.NotificationNewNodeIsOnline(node, speedTestResults);
+                          //Network.AddNode(Node);                                  
+                          else
+                            returnObject = StandardAnsware.TooSlow;
+                        }
+                      else
+                        returnObject = StandardAnsware.IpError;
+                  }
+                  else
+                    returnObject = StandardAnsware.Error;
+                else if (rq == StandardMessages.RequestTestSpeed)
+                {
+                  if (Converter.XmlToObject(xmlObject, typeof(Node), out var objNode))
+                  {
+                    var node = (Node)objNode;
+                    returnObject = network.Protocol.SpeedTestSigned(node);
+                  }
+                  else
+                    returnObject = -1;
                 }
+                else if (rq == StandardMessages.TestSpeed)
+                  returnObject = new string('x', 131072); // 1/8 of MB (1MB = 1048576)
+                contentType = "text/xml;charset=utf-8";
+                var xml = new XmlSerializer(returnObject.GetType());
+                var xmlns = new XmlSerializerNamespaces();
+                xmlns.Add(string.Empty, string.Empty);
+                xml.Serialize(outputStream, returnObject, xmlns);
+                return true;
+              }
+            }
+          }
+#if !DEBUG
               }
               catch (Exception ex)
               {
@@ -315,54 +317,51 @@ namespace NetworkManager
                 System.Diagnostics.Debugger.Break();
                 ReturnObject = ex.Message;
               }
-              if (ReturnObject != null && string.IsNullOrEmpty(Request))
-              {
-                var Vector = new Comunication.ObjectVector(ToUser, ReturnObject);
-                ContentType = "text/xml;charset=utf-8";
-                XmlSerializer xml = new XmlSerializer(typeof(Comunication.ObjectVector));
-                XmlSerializerNamespaces xmlns = new XmlSerializerNamespaces();
-                xmlns.Add(string.Empty, string.Empty);
-                xml.Serialize(OutputStream, Vector, xmlns);
-                return true;
-              }
-            }
-            //if (Post != "")
-            //  var se = new SpolerElement(AppName, FromUser, ToUser, QueryString("post"), XmlObject, SecTimeout);
-
-            //if (string.IsNullOrEmpty(Request))
-            //  SendObject(AppName, FromUser, ToUser, SecWaitAnswer);
-            //else
-            //  switch (Request)
-            //  {
-            //    default:
-            //      break;
-            //  }
-
-
+#endif
+          if (returnObject != null && string.IsNullOrEmpty(request))
+          {
+            var vector = new Comunication.ObjectVector(toUser, returnObject);
+            contentType = "text/xml;charset=utf-8";
+            var xml = new XmlSerializer(typeof(Comunication.ObjectVector));
+            var xmlns = new XmlSerializerNamespaces();
+            xmlns.Add(string.Empty, string.Empty);
+            xml.Serialize(outputStream, vector, xmlns);
+            return true;
           }
+          //if (Post != "")
+          //  var se = new SpolerElement(AppName, FromUser, ToUser, QueryString("post"), XmlObject, SecTimeout);
+
+          //if (string.IsNullOrEmpty(Request))
+          //  SendObject(AppName, FromUser, ToUser, SecWaitAnswer);
+          //else
+          //  switch (Request)
+          //  {
+          //    default:
+          //      break;
+          //  }
         }
-        ContentType = null;
+        contentType = null;
         return false;
       }
     }
     internal readonly OnlineDetectionClass OnlineDetection;
     internal class OnlineDetectionClass
     {
-      public OnlineDetectionClass(Device Device)
+      public OnlineDetectionClass(Device device)
       {
-        CheckInternetConnection = new System.Timers.Timer(30000) { AutoReset = true, Enabled = false, };
-        CheckInternetConnection.Elapsed += (sender, e) => ElapsedCheckInternetConnection();
-        this.Device = Device;
+        _checkInternetConnection = new System.Timers.Timer(30000) { AutoReset = true, Enabled = false, };
+        _checkInternetConnection.Elapsed += (sender, e) => ElapsedCheckInternetConnection();
+        _device = device;
       }
-      private readonly Device Device;
+      private readonly Device _device;
       private bool CheckImOnline()
       {
-        if (Device.BD.VirtualDevice != null)
-          return Device.BD.VirtualDevice.IsOnline;
+        if (_device._bd.VirtualDevice != null)
+          return _device._bd.VirtualDevice.IsOnline;
         try
         {
-          bool r1 = (new System.Net.NetworkInformation.Ping().Send("www.google.com.mx").Status == System.Net.NetworkInformation.IPStatus.Success);
-          bool r2 = (new System.Net.NetworkInformation.Ping().Send("www.bing.com").Status == System.Net.NetworkInformation.IPStatus.Success);
+          var r1 = (new System.Net.NetworkInformation.Ping().Send("www.google.com.mx").Status == System.Net.NetworkInformation.IPStatus.Success);
+          var r2 = (new System.Net.NetworkInformation.Ping().Send("www.bing.com").Status == System.Net.NetworkInformation.IPStatus.Success);
           return r1 && r2;
         }
         catch (Exception ex)
@@ -372,43 +371,37 @@ namespace NetworkManager
         }
         return false;
       }
-      private System.Timers.Timer CheckInternetConnection;
+      private readonly System.Timers.Timer _checkInternetConnection;
       private void ElapsedCheckInternetConnection()
       {
-        if (RunningCheckInternetConnection == 1)
-        {
-          Device.BD._IsOnline = CheckImOnline();
-          if (Device.BD._IsOnline)
-          {
-            CheckInternetConnection.Stop();
-            RunningCheckInternetConnection = 0;
-            Device.Networks.ForEach(x => x.Start());
-          }
-        }
+        if (_runningCheckInternetConnection != 1) return;
+        _device._bd.IsOnline = CheckImOnline();
+        if (!_device._bd.IsOnline) return;
+        _checkInternetConnection.Stop();
+        _runningCheckInternetConnection = 0;
+        _device.Networks.ForEach(x => x.Start());
       }
-      private int RunningCheckInternetConnection = 0;
+      private int _runningCheckInternetConnection = 0;
       /// <summary>
       /// He waits and checks the internet connection, and starts the communication protocol by notifying the online presence
       /// </summary>
       internal void WaitForInternetConnection()
       {
-        RunningCheckInternetConnection += 1;
-        if (RunningCheckInternetConnection == 1)
-        {
-          CheckInternetConnection.Start();
-          new System.Threading.Thread(() => { ElapsedCheckInternetConnection(); }).Start();
-        }
+        _runningCheckInternetConnection += 1;
+        if (_runningCheckInternetConnection != 1) return;
+        _checkInternetConnection.Start();
+        new System.Threading.Thread(ElapsedCheckInternetConnection).Start();
       }
     }
-    public delegate bool OnReceivesHttpRequestDelegate(System.Collections.Specialized.NameValueCollection QueryString, System.Collections.Specialized.NameValueCollection Form, string FromIP, out string ContentType, System.IO.Stream OutputStream);
+    public delegate bool OnReceivesHttpRequestDelegate(System.Collections.Specialized.NameValueCollection queryString, System.Collections.Specialized.NameValueCollection form, string fromIp, out string contentType, System.IO.Stream outputStream);
     /// <summary>
     /// This procedure receives an http request and processes the response based on the input received and the protocol
     /// </summary> 
-    /// <param name="QueryString">QueryString Collection</param>
-    /// <param name="Form">Form Collection</param>
-    /// <param name="FromIP">the IP of who generated the request</param>
-    /// <param name="ContentType">The ContentType of the answer</param>
-    /// <param name="OutputStream">The stream to which the reply will be sent</param>
+    /// <param name="queryString">QueryString Collection</param>
+    /// <param name="form">Form Collection</param>
+    /// <param name="fromIP">the IP of who generated the request</param>
+    /// <param name="contentType">The ContentType of the answer</param>
+    /// <param name="outputStream">The stream to which the reply will be sent</param>
     /// <returns>True if the operation was successful</returns>
     public OnReceivesHttpRequestDelegate OnReceivesHttpRequest;
   }

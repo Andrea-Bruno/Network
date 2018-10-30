@@ -14,7 +14,7 @@ namespace NetworkManager
       public string MachineName = Environment.MachineName;
       public string MasterServer;
       public string MasterServerMachineName;
-      public Network.Node[] EntryPoints = new Network.Node[2] { new Network.Node() { Address = "http://localhost:62430", MachineName = Environment.MachineName, PublicKey = "" }, new Network.Node() { Address = "http://localhost:55008", MachineName = Environment.MachineName, PublicKey = "" } };
+      public Node[] EntryPoints = new Node[2] { new Node() { Address = "http://localhost:62430", MachineName = Environment.MachineName, PublicKey = "" }, new Node() { Address = "http://localhost:55008", MachineName = Environment.MachineName, PublicKey = "" } };
     }
     public class Ambient
     {

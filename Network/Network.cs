@@ -1,128 +1,34 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text;
-using System.Xml.Serialization;
+using System.Timers;
 using static NetworkManager.Protocol;
 
 namespace NetworkManager
 {
   public class Network : Device
   {
+    public delegate bool Execute(Node node);
+
+    public delegate void SyncData(string xmlObject, long timestamp);
+
     /// <summary>
-    /// This method initializes the network.
-    /// You can join the network as a node, and contribute to decentralization, or hook yourself to the network as an external user.
-    /// To create a node, set the MyAddress parameter with your web address.If MyAddress is not set then you are an external user.
+    ///   The buffer is a mechanism that allows you to distribute objects on the network by assigning a timestamp.
+    ///   The objects inserted in the buffer will exit from it on all the nodes following the chronological order of input(they
+    ///   come out sorted by timestamp).
+    ///   The data output from the buffar must be managed by actions that are programmed when the network is initialized.
     /// </summary>
-    /// <param name="EntryPoints">The list of permanent access points nodes, to access the network</param>
-    /// <param name="NetworkName">The name of the infrastructure. For tests we recommend using "testnet"</param>
-    /// <param name="MyNode">Data related to your node. If you do not want to create the node, omit this parameter</param>
-    public Network(Node[] EntryPoints, string NetworkName = "testnet", NodeInitializer MyNode = null) : base(MyNode?.VirtualDevice)
-    {
-      //if (VirtualDevice != null)
-      //{
-      //  //base = new Device() { VirtualDevice = VirtualDevice };
-      //}
-      Comunication = new Comunication(this, null);
-      NodeList = new List<Node>(EntryPoints);
-      Networks.Add(this);
-      if (MyNode != null)
-      {
-        this.MyNode = new Node() { MachineName = MachineName, Address = MyNode.Address };
-        ThisNode = new InfoNode(this.MyNode);
-      }
-      //_MyAddress = MyAddress;
-      _NetworkName = NetworkName;
-      Protocol = new Protocol(this);
-      BufferManager = new BufferManager(this);
-      MappingNetwork = new MappingNetwork(this);
-      //Setup.Network.MyAddress = MyAddress;
-      //Setup.Network.NetworkName = NetworkName;
-      //if (EntryPoints != null)
-      //  Setup.Network.EntryPoints = EntryPoints;
-      OnReceivesHttpRequest = base.OnReceivesHttpRequest;//Is ok! Don't worry
-      OnlineDetection.WaitForInternetConnection();
-    }
-    public class NodeInitializer
-    {
-      public NodeInitializer(){}
-      /// <summary>
-      /// Initialize the node to run in the virtual machine. Parameter used to make network tests by developers.
-      /// </summary>
-      /// <param name="VirtualDevice"></param>
-      public NodeInitializer(VirtualDevice VirtualDevice) { this.VirtualDevice = VirtualDevice; Address = VirtualDevice.Address; }
-      public string Address;
-      public string PrivateKey;
-      /// <summary>
-      /// Optional parameter used to create a virtual machine for testing. The virtual machine helps the developer to create a simulated dummy network in the machine used for development. It is thus possible to create multiple nodes by simulating a p2p network. The list of already instanced devices is obtained through Network.Devices
-      /// </summary>
-      public VirtualDevice VirtualDevice;
-    }
-    internal void Start()
-    {
-      bool ImEntryPount = false;
-      if (NodeList != null)
-      {
-        var EntryPointsList = NodeList.ToList();
-        EntryPointsList.RemoveAll(x => x.Address == MyNode.Address);
-        ImEntryPount = NodeList.Count != EntryPointsList.Count;
-        NodeList = EntryPointsList;
-      }
-      var ConnectionNode = GetRandomNode();
-      var Nodes = Protocol.GetNetworkNodes(ConnectionNode);
-      if (Nodes != null && Nodes.Count > 0)
-        NodeList = Nodes;
-      int NetworkLatency = 0;
-      lock (NodeList)
-      {
-        if (MyNode != null)
-        {
-          //MyNode = new Node(MachineName, _MyAddress);
-          if (VirtualDevice != null)
-            MyNode.IP = VirtualDevice.IP;
-          else
-            MyNode.IP = MyNode.DetectIP();
-          var Stats1 = Protocol.GetStats(GetRandomNode());
-          var Stats2 = Protocol.GetStats(GetRandomNode());
-          NetworkLatency = Math.Max(Stats1?.NetworkLatency ?? 0, Stats2?.NetworkLatency ?? 0);
-          MappingNetwork.SetNetworkSyncTimeSpan(NetworkLatency);
-          ThisNode.ConnectionStatus = Protocol.ImOnline(ConnectionNode, MyNode);
-          // if Answare = NoAnsware then I'm the first online node in the network  
-          if (ThisNode.ConnectionStatus == StandardAnsware.NoAnsware && ImEntryPount)
-            ThisNode.ConnectionStatus = StandardAnsware.Ok;//I'm the first online node
-          NodeList.RemoveAll(x => x.IP == MyNode.IP);
-          //NodeList.Add(new Node());
-          NodeList.Add(MyNode);
-        }
-        NodeList = NodeList.OrderBy(o => o.IP).ToList();
-      }
-      if (MyNode != null)
-      {
-        MappingNetwork.SetNodeNetwork();
-        MappingNetwork.SetNetworkSyncTimeSpan(NetworkLatency);
-      }
-    }
-    //==== REMOVE THE TEST IN THE FINAL VERSION
-    public void Test()
-    {
-      var L = 2;
-      var H = 1;
-      var list = new List<Node>();
-      for (int y = 0; y < H; y++)
-      {
-        for (int x = 0; x < L; x++)
-        {
-          var Node = new Node() { Address = x.ToString() + "," + y.ToString() };
-          list.Add(Node);
-        }
-      }
-      NodeList = list;
-      var MyNode = GetRandomNode();
-      MappingNetwork.SetNodeNetwork();
-      MappingNetwork.GetXY(MyNode, out int X, out int Y);
-      var mynode = MappingNetwork.GetNodeAtPosition(X, Y);
-      var connections = MappingNetwork.GetConnections(1);
-    }
+    internal readonly BufferManager BufferManager;
+
+    /// <summary>
+    ///   It creates communication mechanisms that can be used by a protocol to communicate between nodes via the Internet
+    /// </summary>
+    public readonly Comunication Comunication;
+
+    public readonly Protocol Protocol;
+
+    //internal InfoNode ThisNode;
+    public readonly InfoNode ThisNode;
 
 
     //private string _MyAddress;
@@ -130,141 +36,235 @@ namespace NetworkManager
     //public uint? MyIP { get { return MyNode?.IP; } }
 
 
-    private string _NetworkName;
-    public string NetworkName { get { return _NetworkName; } }
-    private string _MasterServerMachineName;
-    public string MasterServerMachineName { get { return _MasterServerMachineName; } }
-    public class Node
-    {
-      public Node() { }
-      /// <summary>
-      /// Used only to create MyNode. Generate an RSA for the current node.
-      /// </summary>
-      /// <param name="MachineName">Name of this Machine</param>
-      /// <param name="Address">Address of this node</param>
-      internal Node(string MachineName, string Address)
-      {
-        this.MachineName = MachineName;
-        this.Address = Address;
-        //Create RSA
-        var RSA = new System.Security.Cryptography.RSACryptoServiceProvider();
-        var PublicKeyBase64 = Convert.ToBase64String(RSA.ExportCspBlob(false));
-        _RSA = RSA;
+    /// <summary>
+    ///   Contains the logic that establishes a mapping of the network and its subdivision to increase its performance.
+    ///   The network is divided at a logical level into many ring groups, with a recursive pyramidal structure
+    /// </summary>
+    internal MappingNetwork MappingNetwork;
 
-      }
-      public string Address;
-      public string MachineName;
-      public string PublicKey;
-      private System.Security.Cryptography.RSACryptoServiceProvider _RSA;
-      [XmlIgnore]
-      internal System.Security.Cryptography.RSACryptoServiceProvider RSA
+    internal Node MyNode;
+    internal List<Node> NodeList;
+    [Obsolete("We recommend using this method from the Device class because each device could handle multiple networks", false)]
+    public new OnReceivesHttpRequestDelegate OnReceivesHttpRequest;
+
+    private readonly List<Node> _recentOfflineNodes = new List<Node>();
+
+    /// <summary>
+    ///   This method initializes the network.
+    ///   You can join the network as a node, and contribute to decentralization, or hook yourself to the network as an
+    ///   external user.
+    ///   To create a node, set the MyAddress parameter with your web address.If MyAddress is not set then you are an external
+    ///   user.
+    /// </summary>
+    /// <param name="entryPoints">The list of permanent access points nodes, to access the network</param>
+    /// <param name="networkName">The name of the infrastructure. For tests we recommend using "testnet"</param>
+    /// <param name="myNode">Data related to your node. If you do not want to create the node, omit this parameter</param>
+    public Network(Node[] entryPoints, string networkName = "testnet", NodeInitializer myNode = null) : base(
+      myNode?.VirtualDevice)
+    {
+      //if (VirtualDevice != null)
+      //{
+      //  //base = new Device() { VirtualDevice = VirtualDevice };
+      //}
+      Comunication = new Comunication(this);
+      NodeList = new List<Node>(entryPoints);
+      Networks.Add(this);
+      if (myNode != null)
       {
-        get
-        {
-          if (_RSA == null)
-            _RSA = new System.Security.Cryptography.RSACryptoServiceProvider();
-          _RSA.ImportCspBlob(Convert.FromBase64String(PublicKey));
-          return _RSA;
-        }
+        MyNode = new Node(myNode);
+        ThisNode = new InfoNode(MyNode);
       }
-      public uint IP;
-      internal bool CheckIP()
+
+      //_MyAddress = MyAddress;
+      NetworkName = networkName;
+      Protocol = new Protocol(this);
+      BufferManager = new BufferManager(this);
+      MappingNetwork = new MappingNetwork(this);
+      //Setup.Network.MyAddress = MyAddress;
+      //Setup.Network.NetworkName = NetworkName;
+      //if (EntryPoints != null)
+      //  Setup.Network.EntryPoints = EntryPoints;
+#pragma warning disable CS0618 // 'Network.OnReceivesHttpRequest' è obsoleto: 'We recommend using this method from the Device class because each device could handle multiple networks'
+      OnReceivesHttpRequest = base.OnReceivesHttpRequest; //Is ok! Don't worry
+#pragma warning restore CS0618 // 'Network.OnReceivesHttpRequest' è obsoleto: 'We recommend using this method from the Device class because each device could handle multiple networks'
+      OnlineDetection.WaitForInternetConnection();
+    }
+
+    public string NetworkName { get; }
+    public string MasterServerMachineName { get; }
+
+    internal void Start()
+    {
+      var imEntryPoint = false;
+      if (NodeList != null)
       {
-        return IP == DetectIP();
+        var entryPointsList = NodeList.ToList();
+        entryPointsList.RemoveAll(x => x.Address == MyNode.Address);
+        imEntryPoint = NodeList.Count != entryPointsList.Count;
+        NodeList = entryPointsList;
       }
-      internal uint DetectIP()
+
+      var connectionNode = GetRandomNode();
+      var nodes = Protocol.GetNetworkNodes(connectionNode);
+      if (nodes != null && nodes.Count > 0)
+        NodeList = nodes;
+      var networkLatency = 0;
+      lock (NodeList)
       {
-        try
+        if (MyNode != null)
         {
-          var VirtualDevice = FindDeviceByAddress(Address);
-          if (VirtualDevice != null)
-            return VirtualDevice.IP;
-          else
-          {
-            var ips = System.Net.Dns.GetHostAddresses(new Uri(Address).Host);
-            return BitConverter.ToUInt32(ips.Last().GetAddressBytes(), 0);
-          }
+          //MyNode = new Node(MachineName, _MyAddress);
+          MyNode.Ip = VirtualDevice?.Ip ?? MyNode.DetectIp();
+          var stats1 = Protocol.GetStats(GetRandomNode());
+          var stats2 = Protocol.GetStats(GetRandomNode());
+          networkLatency = Math.Max(stats1?.NetworkLatency ?? 0, stats2?.NetworkLatency ?? 0);
+          MappingNetwork.SetNetworkSyncTimeSpan(networkLatency);
+          ThisNode.ConnectionStatus = Protocol.ImOnline(connectionNode, MyNode);
+          // if Answare = NoAnsware then I'm the first online node in the network  
+          if (ThisNode.ConnectionStatus == StandardAnsware.NoAnsware && imEntryPoint)
+            ThisNode.ConnectionStatus = StandardAnsware.Ok; //I'm the first online node
+          NodeList.RemoveAll(x => x.Ip == MyNode.Ip);
+          //NodeList.Add(new Node());
+          NodeList.Add(MyNode);
         }
-        catch (Exception ex)
+
+        NodeList = NodeList.OrderBy(o => o.Ip).ToList();
+      }
+      if (MyNode == null) return;
+      MappingNetwork.SetNodeNetwork();
+      MappingNetwork.SetNetworkSyncTimeSpan(networkLatency);
+    }
+
+    //==== REMOVE THE TEST IN THE FINAL VERSION
+    public void Test()
+    {
+      var l = 2;
+      var h = 1;
+      var list = new List<Node>();
+      for (var y = 0; y < h; y++)
+        for (var x = 0; x < l; x++)
         {
-          System.Diagnostics.Debug.Print(ex.Message);
-          System.Diagnostics.Debugger.Break();
+          var node = new Node { Address = x + "," + y };
+          list.Add(node);
         }
-        return 0;
+
+      NodeList = list;
+      var myNode = GetRandomNode();
+      MappingNetwork.SetNodeNetwork();
+      MappingNetwork.GetXy(myNode, NodeList, out var x2, out var y2);
+      var thisNode = MappingNetwork.GetNodeAtPosition(NodeList, x2, y2);
+      var ok = MyNode == thisNode;
+      var connections = MappingNetwork.GetConnections(1);
+    }
+
+    private void AddNode(Node node)
+    {
+      lock (NodeList)
+      {
+        NodeList.Add(node);
+        NodeList = NodeList.OrderBy(o => o.Ip).ToList();
+        MappingNetwork.SetNodeNetwork();
       }
     }
-    internal List<Node> NodeList;
+
+    /// <summary>
+    ///   Add a new node to the network. Using this function, the new node will be added to all nodes simultaneously.
+    /// </summary>
+    /// <param name="node">Node to add</param>
+    /// <param name="timestamp">Timestamp of the notification</param>
+    internal void AddNode(Node node, long timestamp)
+    {
+      var deltaTimeMs = 30000; //Add this node after these milliseconds from timestamp
+      var ms = deltaTimeMs - (int)new TimeSpan(Now.Ticks - timestamp).TotalMilliseconds;
+      var timer = new Timer(ms >= 1 ? ms : 1) { AutoReset = false };
+      timer.Elapsed += (sender, e) => { AddNode(node); };
+      timer.Start();
+    }
+
+    internal List<Node> CurrentNodes()
+    {
+        return NodeList.Concat(_recentOfflineNodes).ToList();
+    }
+
+    internal bool ValidateConnectionAtLevel0(uint ipNodeAtLevel0, List<Node> connections)
+    {
+      var nodeAtLevel0 = CurrentNodes().Find(x => x.Ip == ipNodeAtLevel0);
+      return nodeAtLevel0 != null && ValidateConnectionAtLevel0(nodeAtLevel0, connections);
+    }
+
+    internal bool ValidateConnectionAtLevel0(Node nodeAtLevel0, List<Node> connections)
+    {
+      lock (NodeList)
+        lock (_recentOfflineNodes)
+        {
+          List<Node> possibleConnectios;
+          for (var n = 0; n <= _recentOfflineNodes.Count; n++)
+            if (n == 0)
+            {
+              possibleConnectios = MappingNetwork.GetConnections(0, nodeAtLevel0, NodeList);
+              if (possibleConnectios.Count == connections.Count &&
+                  connections.TrueForAll(x => possibleConnectios.Contains(x)))
+                return true;
+            }
+            else
+            {
+              var groupsNodesToAdd = (List<List<Node>>)Utility.GetPermutations(_recentOfflineNodes, n);
+              foreach (var nodesToAdd in groupsNodesToAdd)
+              {
+                var list = NodeList.Concat(nodesToAdd).ToList();
+                list = list.OrderBy(x => x.Ip).ToList();
+                possibleConnectios = MappingNetwork.GetConnections(0, nodeAtLevel0, list);
+                if (possibleConnectios.Count == connections.Count &&
+                    connections.TrueForAll(x => possibleConnectios.Contains(x)))
+                  return true;
+              }
+            }
+        }
+
+      return false;
+    }
+
     internal Node GetRandomNode()
     {
       lock (NodeList)
       {
-        int min = 1;
+        var min = 1;
         if (MyNode != null)
           min = 2;
-        if (NodeList.Count >= min)
-        {
-          Node RandomNode;
-          do
-          {
-            RandomNode = NodeList[new Random().Next(NodeList.Count)];
-          } while (RandomNode == MyNode);
-          return RandomNode;
-        }
-      }
-      return null;
-    }
-    public class InfoNode
-    {
-      public InfoNode(Node Base)
-      {
-        this.Base = Base;
-      }
-      private Node Base;
-      public string Address { get { return Base.Address; } }
-      public string MachineName { get { return Base.MachineName; } }
-      public string PublicKey { get { return Base.PublicKey; } }
-      public uint IP { get { return Base.IP; } }
-      private StandardAnsware _ConnectionStatus = StandardAnsware.Disconnected;
-      public StandardAnsware ConnectionStatus { get { return _ConnectionStatus; } internal set { _ConnectionStatus = value; OnConnectionStatusChanged?.Invoke(EventArgs.Empty, ConnectionStatus); ; } }
-      public event EventHandler<StandardAnsware> OnConnectionStatusChanged ;
-    }
-    //internal InfoNode ThisNode;
-    public readonly InfoNode ThisNode; 
-    internal Node MyNode = null;
-    /// <summary>
-    /// Performs a specific code addressed to a randomly selected node.
-    /// </summary>
-    /// <param name="Execute">The instructions to be executed</param>
-    public bool InteractWithRandomNode(Execute Execute)
-    {
-      bool Ok;
-      int TryNode = 0;
-      do
-      {
-        var Node = GetRandomNode();
-        int Count = 0;
+        if (NodeList.Count < min) return null;
+        Node randomNode;
         do
         {
-          Count++;
-          Ok = Execute.Invoke(Node);
-        } while (Ok == false && Count < 2);
-      } while (Ok == false && TryNode < 3);
-      return Ok;
+          randomNode = NodeList[new Random().Next(NodeList.Count)];
+        } while (randomNode == MyNode);
+        return randomNode;
+      }
     }
-    public delegate bool Execute(Node Node);
+
     /// <summary>
-    /// Contains the logic that establishes a mapping of the network and its subdivision to increase its performance.
-    /// The network is divided at a logical level into many ring groups, with a recursive pyramidal structure
+    ///   Performs a specific code addressed to a randomly selected node.
     /// </summary>
-    internal MappingNetwork MappingNetwork;
+    /// <param name="execute">The instructions to be executed</param>
+    public bool InteractWithRandomNode(Execute execute)
+    {
+      bool ok;
+      var tryNode = 0;
+      do
+      {
+        var node = GetRandomNode();
+        var count = 0;
+        do
+        {
+          count++;
+          ok = execute.Invoke(node);
+        } while (ok == false && count < 2);
+      } while (ok == false && tryNode < 3);
+
+      return ok;
+    }
+
     /// <summary>
-    /// The buffer is a mechanism that allows you to distribute objects on the network by assigning a timestamp.
-    /// The objects inserted in the buffer will exit from it on all the nodes following the chronological order of input(they come out sorted by timestamp).
-    /// The data output from the buffar must be managed by actions that are programmed when the network is initialized.
-    /// </summary>
-    internal readonly BufferManager BufferManager;
-    /// <summary>
-    /// Send an object to the network to be inserted in the shared buffer
+    ///   Send an object to the network to be inserted in the shared buffer
     /// </summary>
     /// <param name="Object">Object to send</param>
     /// <returns></returns>
@@ -272,31 +272,43 @@ namespace NetworkManager
     {
       return Protocol.AddToSharedBuffer(GetRandomNode(), Object);
     }
-    public delegate void SyncData(string XmlObject, long Timestamp);
+
     /// <summary>
-    /// Add a action used to local sync the objects coming from the buffer
+    ///   Add a action used to local sync the objects coming from the buffer
     /// </summary>
-    /// <param name="Action">Action to execute for every object</param>
-    /// <param name="ForObjectName">Indicates what kind of objects will be treated by this action</param>
-    public bool AddSyncDataFromBufferAction(SyncData Action, string ForObjectName)
+    /// <param name="action">Action to execute for every object</param>
+    /// <param name="forObjectName">Indicates what kind of objects will be treated by this action</param>
+    public bool AddSyncDataFromBufferAction(SyncData action, string forObjectName)
     {
-      return BufferManager.AddSyncDataAction(Action, ForObjectName);
+      return BufferManager.AddSyncDataAction(action, forObjectName);
     }
-    /// <summary>
-    /// It creates communication mechanisms that can be used by a protocol to communicate between nodes via the Internet
-    /// </summary>
-    public readonly Comunication Comunication;
-    public readonly Protocol Protocol;
-    /// <summary>
-    /// This procedure receives an http request and processes the response based on the input received and the protocol
-    /// </summary>
-    /// <param name="QueryString">QueryString Collection</param>
-    /// <param name="Form">Form Collection</param>
-    /// <param name="FromIP">the IP of who generated the request</param>
-    /// <param name="ContentType">The ContentType of the answer</param>
-    /// <param name="OutputStream">The stream to which the reply will be sent</param>
-    /// <returns>True if the operation was successful</returns>
-    [Obsolete("We recommend using this method from the Device class because each device could handle multiple networks", false)]
-    public new OnReceivesHttpRequestDelegate OnReceivesHttpRequest;
+
+    public class InfoNode
+    {
+      private readonly Node _base;
+      private StandardAnsware _connectionStatus = StandardAnsware.Disconnected;
+
+      public InfoNode(Node Base)
+      {
+        _base = Base;
+      }
+
+      public string Address => _base.Address;
+      public string MachineName => _base.MachineName;
+      public string PublicKey => _base.PublicKey;
+      public uint Ip => _base.Ip;
+
+      public StandardAnsware ConnectionStatus
+      {
+        get => _connectionStatus;
+        internal set
+        {
+          _connectionStatus = value;
+          OnConnectionStatusChanged?.Invoke(EventArgs.Empty, ConnectionStatus);
+        }
+      }
+
+      public event EventHandler<StandardAnsware> OnConnectionStatusChanged;
+    }
   }
 }

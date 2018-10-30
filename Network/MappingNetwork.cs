@@ -11,34 +11,41 @@ namespace NetworkManager
   /// </summary>
   internal class MappingNetwork
   {
-    public MappingNetwork(Network Network)
+    public MappingNetwork(Network network)
     {
-      this.Network = Network;
+      _network = network;
     }
-    private Network Network;
-    private int SquareSide = 0;
-    private int MyX = 0;
-    private int MyY = 0;
+    private readonly Network _network;
+    private int _c;
+    private int _s;
+    private int SquareSide(int count)
+    {
+      if (count == _c)
+        return _s;
+      _s = (int)Math.Ceiling(Math.Sqrt(count));
+      _c = count;
+      return _s;
+    }
+    private int _myX = 0;
+    private int _myY = 0;
     internal TimeSpan NetworkSyncTimeSpan;
-    internal void SetNetworkSyncTimeSpan(int Latency)
+    internal void SetNetworkSyncTimeSpan(int latency)
     {
-      if (Latency != 0)
-        NetworkSyncTimeSpan = TimeSpan.FromMilliseconds(Latency * 1.2);
+      if (latency != 0)
+        NetworkSyncTimeSpan = TimeSpan.FromMilliseconds(latency * 1.2);
     }
-    internal void GetXY(Node Node, out int X, out int Y)
+    internal void GetXy(Node node, List<Node> nodeList, out int x, out int y)
     {
-      var Position = Network.NodeList.IndexOf(Node);
-      X = Position % SquareSide;
-      Y = (int)Position / SquareSide;
+      var position = nodeList.IndexOf(node);
+      var side = SquareSide(nodeList.Count);
+      x = position % side;
+      y = (int)position / side;
     }
 
-    internal Node GetNodeAtPosition(int X, int Y)
+    internal Node GetNodeAtPosition(List<Node> nodeList, int x, int y)
     {
-      var id = (Y * SquareSide + X);
-      if (id >= 0 && id < Network.NodeList.Count)
-        return Network.NodeList[id];
-      else
-        return Network.NodeList[Mod(id, Network.NodeList.Count)];
+      var id = (y * SquareSide(nodeList.Count) + x);
+      return id >= 0 && id < nodeList.Count ? nodeList[id] : nodeList[Mod(id, nodeList.Count)];
     }
 
     /// <summary>
@@ -54,57 +61,53 @@ namespace NetworkManager
     }
     internal void SetNodeNetwork()
     {
-      SquareSide = (int)Math.Ceiling(Math.Sqrt(Network.NodeList.Count));
-      GetXY(Network.MyNode, out MyX, out MyY);
+      //SquareSide = (int)Math.Ceiling(Math.Sqrt(Network.NodeList.Count));
+      GetXy(_network.MyNode, _network.NodeList, out _myX, out _myY);
       CacheConnections = new Dictionary<int, List<Node>>();
     }
     internal Dictionary<int, List<Node>> CacheConnections = new Dictionary<int, List<Node>>();
     /// <summary>
     /// All connections that have the node at a certain level
     /// </summary>
-    /// <param name="Level">The level is base 1</param>
+    /// <param name="level">The level is base 1</param>
     /// <returns>The list of nodes connected to the level</returns>
-    internal List<Node> GetConnections(int Level)
+    internal List<Node> GetConnections(int level)
     {
-      return GetConnections(Level, Network.MyNode);
-    }
-    internal List<Node> GetConnections(int Level, Node Node)
-    {
-      // return GetConnections(Level, X, Y);
-      int Distance = SquareSide / (int)Math.Pow(3, Level);
-      if (Distance < 1)
-        Distance = 1; int XNode, YNode;
-      if (Node != Network.MyNode)
-        GetXY(Node, out XNode, out YNode);
-      else
-      {
-        XNode = MyX;
-        YNode = MyY;
-      }
       lock (CacheConnections)
       {
-        if (Node == Network.MyNode && CacheConnections.TryGetValue(Distance, out List<Node> List))
-          return List;
-        List = new List<Node>();
-        for (int UpDown = -1; UpDown <= 1; UpDown++)
-          for (int LeftRight = -1; LeftRight <= 1; LeftRight++)
-            if (LeftRight != 0 || UpDown != 0)
-            {
-              var X = XNode + Distance * LeftRight;
-              var Y = YNode + Distance * UpDown;
-                var Connection = GetNodeAtPosition(X, Y);
-                if (Connection != Node && !List.Contains(Connection))
-                  List.Add(Connection);
-            }
-        if (Node == Network.MyNode)
-          CacheConnections.Add(Distance, List);
-        return List;
+        if (CacheConnections.TryGetValue(level, out var result))
+          return result;
+        result = GetConnections(level, _network.MyNode, _network.NodeList);
+        CacheConnections.Add(level, result);
+        return result;
       }
     }
-    //private List<Node> GetConnections(int Level, int XNode, int YNode)
-    //{
-
-    //}
+    internal List<Node> GetConnections(int level, Node node, List<Node> nodeList)
+    {
+      // return GetConnections(Level, X, Y);
+      var distance = SquareSide(nodeList.Count) / (int)Math.Pow(3, level);
+      if (distance < 1)
+        distance = 1; int xNode, yNode;
+      if (node != _network.MyNode || nodeList != _network.NodeList)
+        GetXy(node, nodeList, out xNode, out yNode);
+      else
+      {
+        xNode = _myX;
+        yNode = _myY;
+      }
+      var list = new List<Node>();
+      for (var upDown = -1; upDown <= 1; upDown++)
+        for (var leftRight = -1; leftRight <= 1; leftRight++)
+          if (leftRight != 0 || upDown != 0)
+          {
+            var x = xNode + distance * leftRight;
+            var y = yNode + distance * upDown;
+            var connection = GetNodeAtPosition(nodeList, x, y);
+            if (connection != node && !list.Contains(connection))
+              list.Add(connection);
+          }
+      return list;
+    }
   }
 
 }

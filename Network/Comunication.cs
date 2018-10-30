@@ -1,441 +1,499 @@
 ﻿using System;
-using System.Collections.Generic;
 using System.Collections.Specialized;
+using System.Diagnostics;
 using System.IO;
+using System.Net;
+using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Text;
+using System.Threading;
+using System.Web;
+using System.Xml.Serialization;
+using Timer = System.Timers.Timer;
 
 namespace NetworkManager
 {
   /// <summary>
-  /// It creates communication mechanisms that can be used by a protocol to communicate between nodes via the Internet
+  ///   It creates communication mechanisms that can be used by a protocol to communicate between nodes via the Internet
   /// </summary>
   public class Comunication
   {
-    public Comunication(Network Network, string MasterServerMachineName)
+    public delegate void OnReceivedObject(string fromUser, string objectName, string xmlObject);
+
+    private readonly string _appName = Assembly.GetExecutingAssembly().FullName.Split(',')[0];
+    private readonly string _masterServer;
+    private readonly string _masterServerMachineName;
+    private readonly Network _network;
+
+    public Comunication(Network network, string masterServerMachineName = null, string masterServer=null)
     {
-      this.Network = Network;
-      this.MasterServerMachineName = MasterServerMachineName;
+      _network = network;
+      _masterServerMachineName = masterServerMachineName;
+      _masterServer = masterServer;
     }
-    private Network Network;
-    private string MasterServerMachineName;
-    public string SendObjectSync(object Obj, string WebAddress = null, NameValueCollection Form = null, string ToUser = null, int SecTimeOut = 0, int SecWaitAnswer = 0, Action ExecuteIfNoAnswer = null, bool CancellAllMyRequest = false, bool RemoveObjectsToMe = false, bool RemoveMyObjects = false)
+
+    public string SendObjectSync(object obj, string webAddress = null, NameValueCollection form = null,
+      string toUser = null, int secTimeOut = 0, int secWaitAnswer = 0, Action executeIfNoAnswer = null,
+      bool cancellAllMyRequest = false, bool removeObjectsToMe = false, bool removeMyObjects = false)
     {
-      var Reader = ExecuteServerRequest(false, WebAddress, null, Obj, Form, null, SecWaitAnswer, ExecuteIfNoAnswer, SecTimeOut, ToUser, CancellAllMyRequest, RemoveObjectsToMe, RemoveMyObjects);
-      return Reader.HTML;
+      var reader = ExecuteServerRequest(false, webAddress, null, obj, form, null, secWaitAnswer, executeIfNoAnswer,
+        secTimeOut, toUser, cancellAllMyRequest, removeObjectsToMe, removeMyObjects);
+      return reader.Html;
     }
-    public BaseWebReader SendObjectAsync(ref object Obj, string WebAddress = null, NameValueCollection Form = null, string ToUser = null, int SecTimeOut = 0, int SecWaitAnswer = 0, OnReceivedObject ExecuteOnReceivedObject = null, Action ExecuteIfNoAnswer = null, bool CancellAllMyRequest = false, bool RemoveObjectsToMe = false, bool RemoveMyObjects = false)
+
+    public BaseWebReader SendObjectAsync(ref object obj, string webAddress = null, NameValueCollection form = null,
+      string toUser = null, int secTimeOut = 0, int secWaitAnswer = 0, OnReceivedObject executeOnReceivedObject = null,
+      Action executeIfNoAnswer = null, bool cancellAllMyRequest = false, bool removeObjectsToMe = false,
+      bool removeMyObjects = false)
     {
-      return ExecuteServerRequest(true, WebAddress, null, Obj, Form, ExecuteOnReceivedObject, SecWaitAnswer, ExecuteIfNoAnswer, SecTimeOut, ToUser, CancellAllMyRequest, RemoveObjectsToMe, RemoveMyObjects);
+      return ExecuteServerRequest(true, webAddress, null, obj, form, executeOnReceivedObject, secWaitAnswer,
+        executeIfNoAnswer, secTimeOut, toUser, cancellAllMyRequest, removeObjectsToMe, removeMyObjects);
     }
-    public string GetObjectSync(string WebAddress = null, string Request = null, object Obj = null, string ToUser = null, int SecWaitAnswer = 0, Action ExecuteIfNoAnswer = null, bool CancellAllMyRequest = false, bool RemoveObjectsToMe = false, bool RemoveMyObjects = false)
+
+    public string GetObjectSync(string webAddress = null, string request = null, object obj = null,
+      string toUser = null, int secWaitAnswer = 0, Action executeIfNoAnswer = null, bool cancellAllMyRequest = false,
+      bool removeObjectsToMe = false, bool removeMyObjects = false)
     {
-      var Reader = ExecuteServerRequest(false, WebAddress, Request, Obj, null, null, SecWaitAnswer, ExecuteIfNoAnswer, 0, ToUser, CancellAllMyRequest, RemoveObjectsToMe, RemoveMyObjects);
-      return Reader.HTML;
+      var reader = ExecuteServerRequest(false, webAddress, request, obj, null, null, secWaitAnswer, executeIfNoAnswer,
+        0, toUser, cancellAllMyRequest, removeObjectsToMe, removeMyObjects);
+      return reader.Html;
     }
-    public BaseWebReader GetObjectAsync(OnReceivedObject ExecuteOnReceivedObject, string WebAddress = null, string Request = null, object Obj = null, string ToUser = null, int SecWaitAnswer = 0, Action ExecuteIfNoAnswer = null, bool CancellAllMyRequest = false, bool RemoveObjectsToMe = false, bool RemoveMyObjects = false)
+
+    public BaseWebReader GetObjectAsync(OnReceivedObject executeOnReceivedObject, string webAddress = null,
+      string request = null, object obj = null, string toUser = null, int secWaitAnswer = 0,
+      Action executeIfNoAnswer = null, bool cancellAllMyRequest = false, bool removeObjectsToMe = false,
+      bool removeMyObjects = false)
     {
-      return ExecuteServerRequest(true, WebAddress, Request, Obj, null, ExecuteOnReceivedObject, SecWaitAnswer, ExecuteIfNoAnswer, 0, ToUser, CancellAllMyRequest, RemoveObjectsToMe, RemoveMyObjects);
+      return ExecuteServerRequest(true, webAddress, request, obj, null, executeOnReceivedObject, secWaitAnswer,
+        executeIfNoAnswer, 0, toUser, cancellAllMyRequest, removeObjectsToMe, removeMyObjects);
     }
-    public delegate void OnReceivedObject(string FromUser, string ObjectName, string XmlObject);
-    private string AppName = System.Reflection.Assembly.GetExecutingAssembly().FullName.Split(',')[0];
+
     private string UrlServer()
     {
-      if (MasterServer == "")
-        return null;
-      return MasterServer.TrimEnd('/');
+      return _masterServer == "" ? null : _masterServer.TrimEnd('/');
     }
-    private string MasterServer;
-    private BaseWebReader ExecuteServerRequest(bool Async, string WebAddress = null, string Request = null, object Obj = null, NameValueCollection Form = null, OnReceivedObject ExecuteOnReceivedObject = null, int SecWaitAnswer = 0, Action ExecuteIfNoAnswer = null, int SecTimeOut = 0, string ToUser = null, bool CancellAllMyRequest = false, bool RemoveObjectsToMe = false, bool RemoveMyObjects = false)
-    {
-      if (WebAddress == null)
-        WebAddress = UrlServer();
-      WebAddress = WebAddress.TrimEnd('/');
-      WebAddress += "?network=" + System.Uri.EscapeDataString(Network.NetworkName) + "&app=" + System.Uri.EscapeDataString(AppName) + "&fromuser=" + System.Uri.EscapeDataString(Environment.MachineName) + "&secwaitanswer=" + SecWaitAnswer.ToString();
-      if (CancellAllMyRequest)
-        WebAddress += "&cancellrequest=true";
-      if (RemoveObjectsToMe)
-        WebAddress += "&removeobjects=true";
-      if (RemoveMyObjects)
-        WebAddress += "&removemyobjects=true";
-      if (string.IsNullOrEmpty(ToUser))
-        ToUser = MasterServerMachineName + ".";
-      if (!string.IsNullOrEmpty(ToUser))
-        WebAddress += "&touser=" + ToUser;
-      if (!string.IsNullOrEmpty(Request))
-        WebAddress += "&request=" + Request;
 
-      Action<string> Parser = null;
-      if (ExecuteOnReceivedObject != null)
+    private BaseWebReader ExecuteServerRequest(bool async, string webAddress = null, string request = null,
+      object obj = null, NameValueCollection form = null, OnReceivedObject executeOnReceivedObject = null,
+      int secWaitAnswer = 0, Action executeIfNoAnswer = null, int secTimeOut = 0, string toUser = null,
+      bool cancellAllMyRequest = false, bool removeObjectsToMe = false, bool removeMyObjects = false)
+    {
+      if (webAddress == null)
+        webAddress = UrlServer();
+      webAddress = webAddress.TrimEnd('/');
+      webAddress += "?network=" + Uri.EscapeDataString(_network.NetworkName) + "&app=" + Uri.EscapeDataString(_appName) +
+                    "&fromuser=" + Uri.EscapeDataString(Environment.MachineName) + "&secwaitanswer=" + secWaitAnswer;
+      if (cancellAllMyRequest)
+        webAddress += "&cancellrequest=true";
+      if (removeObjectsToMe)
       {
-        Parser = (String Html) =>
+        webAddress += "&removeobjects=true";
+      }
+
+      if (removeMyObjects)
+        webAddress += "&removemyobjects=true";
+      if (string.IsNullOrEmpty(toUser))
+        toUser = _masterServerMachineName + ".";
+      if (!string.IsNullOrEmpty(toUser))
+        webAddress += "&touser=" + toUser;
+      if (!string.IsNullOrEmpty(request))
+        webAddress += "&request=" + request;
+
+      Action<string> parser = null;
+      if (executeOnReceivedObject != null)
+        parser = html =>
         {
-          ObjectVector ObjectVector = null;
-          Converter.XmlToObject(Html, typeof(ObjectVector), out object ReturmObj);
-          ObjectVector = (ObjectVector)ReturmObj;
-          if (ObjectVector != null)
-            ExecuteOnReceivedObject.Invoke(ObjectVector.FromUser, ObjectVector.ObjectName, ObjectVector.XmlObject);
+          Converter.XmlToObject(html, typeof(ObjectVector), out var returmObj);
+          var objectVector = (ObjectVector)returmObj;
+          if (objectVector != null)
+            executeOnReceivedObject.Invoke(objectVector.FromUser, objectVector.ObjectName, objectVector.XmlObject);
         };
-      }
       else
-        WebAddress += "&nogetobject=true";
+        webAddress += "&nogetobject=true";
 
-      if (Obj != null)
+      if (obj != null)
       {
-        WebAddress += "&post=" + Obj.GetType().Name + "&sectimeout=" + SecTimeOut.ToString();
-        System.IO.StringWriter Str = new System.IO.StringWriter();
-        System.Xml.Serialization.XmlSerializer xml = new System.Xml.Serialization.XmlSerializer(Obj.GetType());
-        System.Xml.Serialization.XmlSerializerNamespaces xmlns = new System.Xml.Serialization.XmlSerializerNamespaces();
+        webAddress += "&post=" + obj.GetType().Name + "&sectimeout=" + secTimeOut;
+        var str = new StringWriter();
+        var xml = new XmlSerializer(obj.GetType());
+        var xmlns = new XmlSerializerNamespaces();
         xmlns.Add(string.Empty, string.Empty);
-        xml.Serialize(Str, Obj, xmlns);
-        string postData = Str.ToString();
-        if (Form == null)
-          Form = new NameValueCollection();
-        string StrCod = Converter.StringToBase64(postData);
-        Form.Add("object", StrCod);
+        xml.Serialize(str, obj, xmlns);
+        var postData = str.ToString();
+        if (form == null)
+          form = new NameValueCollection();
+        var strCod = Converter.StringToBase64(postData);
+        form.Add("object", strCod);
       }
-      var VirtualDevice = Device.FindDeviceByAddress(WebAddress);
-      if (VirtualDevice != null)
-        return VirtualReadWeb(Async, Converter.UintToIp(Network.VirtualDevice.IP), WebAddress, Parser, null, Form, SecWaitAnswer, ExecuteIfNoAnswer, VirtualDevice);
-      else
-        return ReadWeb(Async, WebAddress, Parser, null, Form, SecWaitAnswer, ExecuteIfNoAnswer);
+
+      var virtualDevice = Device.FindDeviceByAddress(webAddress);
+      return virtualDevice != null
+        ? VirtualReadWeb(async, Converter.UintToIp(_network.VirtualDevice.Ip), webAddress, parser, null, form,
+          secWaitAnswer, executeIfNoAnswer, virtualDevice)
+        : (BaseWebReader)ReadWeb(async, webAddress, parser, null, form, secWaitAnswer, executeIfNoAnswer);
     }
-    public static VirtualWebReader VirtualReadWeb(bool Async, string MyIp, string Url, Action<string> Parser, Action Elapse, NameValueCollection Form = null, int SecTimeout = 0, Action ExecuteAtTimeout = null, VirtualDevice SendRequestTo = null)
+
+    public static VirtualWebReader VirtualReadWeb(bool async, string myIp, string url, Action<string> parser,
+      Action elapse, NameValueCollection form = null, int secTimeout = 0, Action executeAtTimeout = null,
+      VirtualDevice sendRequestTo = null)
     {
-      return new VirtualWebReader(Async, MyIp, Url, Parser, Elapse, Form, SecTimeout, ExecuteAtTimeout, SendRequestTo);
+      return new VirtualWebReader(async, myIp, url, parser, elapse, form, secTimeout, executeAtTimeout, sendRequestTo);
     }
-    public static WebReader ReadWeb(bool Async, string Url, Action<string> Parser, Action Elapse, NameValueCollection Form = null, int SecTimeout = 0, Action ExecuteAtTimeout = null)
+
+    public static WebReader ReadWeb(bool async, string url, Action<string> parser, Action elapse,
+      NameValueCollection form = null, int secTimeout = 0, Action executeAtTimeout = null)
     {
-      return new WebReader(Async, Url, Parser, Elapse, Form, SecTimeout, ExecuteAtTimeout);
+      return new WebReader(async, url, parser, elapse, form, secTimeout, executeAtTimeout);
     }
+
     public class VirtualWebReader : BaseWebReader
     {
-      public VirtualWebReader(bool Async, string MyIp, string Url, Action<string> Parser, Action Elapse, NameValueCollection Form = null, int SecTimeout = 0, Action ExecuteAtTimeout = null, VirtualDevice SendRequestTo = null) : base(Async, Url, Parser, Elapse, Form, SecTimeout, ExecuteAtTimeout)
+      private VirtualWebClient _virtualWebClient;
+      private readonly VirtualDevice _virtualDevice;
+
+      public VirtualWebReader(bool async, string myIp, string url, Action<string> parser, Action elapse,
+        NameValueCollection form = null, int secTimeout = 0, Action executeAtTimeout = null,
+        VirtualDevice sendRequestTo = null) : base(async, url, parser, elapse, form, secTimeout, executeAtTimeout)
       {
-        VirtualDevice = SendRequestTo ?? Device.FindDeviceByAddress(Url);
+        _virtualDevice = sendRequestTo ?? Device.FindDeviceByAddress(url);
         VirtualWebClient = new VirtualWebClient();
-        Cancel = new Action(() => { VirtualWebClient.CancelAsync(); });
-        UploadAsync = new Action(() => { VirtualWebClient.UploadValuesAsync(Url, "POST", Form, VirtualDevice, MyIp); });
+        Cancel = () => { VirtualWebClient.CancelAsync(); };
+        UploadAsync = () => { VirtualWebClient.UploadValuesAsync(url, "POST", form, _virtualDevice, myIp); };
         Upload = () =>
         {
-          HTML = VirtualWebClient.UploadValues(Url, "POST", Form, VirtualDevice, MyIp);
-          return HTML;
+          Html = VirtualWebClient.UploadValues(url, "POST", form, _virtualDevice, myIp);
+          return Html;
         };
-        Start(Url, Async);
+        Start(url, async);
       }
-      private VirtualDevice VirtualDevice;
-      private VirtualWebClient _VirtualWebClient;
+
       private VirtualWebClient VirtualWebClient
       {
         [MethodImpl(MethodImplOptions.Synchronized)]
-        get
-        {
-          return _VirtualWebClient;
-        }
+        get => _virtualWebClient;
 
         [MethodImpl(MethodImplOptions.Synchronized)]
         set
         {
-          if (_VirtualWebClient != null)
-          {
-            _VirtualWebClient.OpenReadCompleted -= WebClient_OpenReadCompleted;
-          }
+          if (_virtualWebClient != null) _virtualWebClient.OpenReadCompleted -= WebClient_OpenReadCompleted;
 
-          _VirtualWebClient = value;
-          if (_VirtualWebClient != null)
-          {
-            _VirtualWebClient.OpenReadCompleted += WebClient_OpenReadCompleted;
-          }
+          _virtualWebClient = value;
+          if (_virtualWebClient != null) _virtualWebClient.OpenReadCompleted += WebClient_OpenReadCompleted;
         }
       }
+
       private void WebClient_OpenReadCompleted(object sender, EventArgs e)
       {
-        var Error = VirtualWebClient.Error != null;
-        bool Cancelled = false;
-        if (Error)
-          Cancelled = VirtualWebClient.Cancelled;
-        var HTML = VirtualWebClient.Result;
-        OpenReadCompleted(HTML, Error, Cancelled);
+        var error = VirtualWebClient.Error != null;
+        var cancelled = false;
+        if (error)
+          cancelled = VirtualWebClient.Cancelled;
+        var html = VirtualWebClient.Result;
+        OpenReadCompleted(html, error, cancelled);
       }
     }
+
     public class WebReader : BaseWebReader
     {
-      public WebReader(bool Async, string Url, Action<string> Parser, Action Elapse, NameValueCollection Form = null, int SecTimeout = 0, Action ExecuteAtTimeout = null) : base(Async, Url, Parser, Elapse, Form, SecTimeout, ExecuteAtTimeout)
+      private WebClient _webClient;
+
+      public WebReader(bool async, string url, Action<string> parser, Action elapse, NameValueCollection form = null,
+        int secTimeout = 0, Action executeAtTimeout = null) : base(async, url, parser, elapse, form, secTimeout,
+        executeAtTimeout)
       {
-        WebClient = new System.Net.WebClient();
-        Cancel = new Action(() => { WebClient.CancelAsync(); });
-        UploadAsync = new Action(() => { WebClient.UploadValuesAsync(new Uri(Url), "POST", Form); });
+        WebClient = new WebClient();
+        Cancel = () => { WebClient.CancelAsync(); };
+        UploadAsync = () => { WebClient.UploadValuesAsync(new Uri(url), "POST", form); };
         Upload = () =>
         {
-          var responsebytes = WebClient.UploadValues(Url, "POST", Form);
-          HTML = (new System.Text.UTF8Encoding()).GetString(responsebytes);
-          return HTML;
+          var responsebytes = WebClient.UploadValues(url, "POST", form);
+          Html = new UTF8Encoding().GetString(responsebytes);
+          return Html;
         };
-        Start(Url, Async);
+        Start(url, async);
       }
-      private System.Net.WebClient _WebClient;
-      private System.Net.WebClient WebClient
+
+      private WebClient WebClient
       {
         [MethodImpl(MethodImplOptions.Synchronized)]
-        get
-        {
-          return _WebClient;
-        }
+        get => _webClient;
 
         [MethodImpl(MethodImplOptions.Synchronized)]
         set
         {
-          if (_WebClient != null)
-          {
-            _WebClient.OpenReadCompleted -= WebClient_OpenReadCompleted;
-          }
+          if (_webClient != null) _webClient.OpenReadCompleted -= WebClient_OpenReadCompleted;
 
-          _WebClient = value;
-          if (_WebClient != null)
-          {
-            _WebClient.OpenReadCompleted += WebClient_OpenReadCompleted;
-          }
+          _webClient = value;
+          if (_webClient != null) _webClient.OpenReadCompleted += WebClient_OpenReadCompleted;
         }
       }
-      private void WebClient_OpenReadCompleted(object sender, System.Net.OpenReadCompletedEventArgs e)
+
+      private void WebClient_OpenReadCompleted(object sender, OpenReadCompletedEventArgs e)
       {
-        var ContentType = WebClient.ResponseHeaders?["Content-Type"];
-        var Error = e.Error != null;
-        bool Cancelled = false;
-        if (Error)
-          Cancelled = e.Cancelled;
-        var Result = e.Result;
-        OpenReadCompleted(Result, Error, Cancelled, ContentType);
+        var contentType = WebClient.ResponseHeaders?["Content-Type"];
+        var error = e.Error != null;
+        var cancelled = false;
+        if (error)
+          cancelled = e.Cancelled;
+        var result = e.Result;
+        OpenReadCompleted(result, error, cancelled, contentType);
       }
     }
+
     public class BaseWebReader
     {
-      public BaseWebReader(bool Async, string Url, Action<string> Parser, Action Elapse, NameValueCollection Dictionary = null, int SecTimeout = 0, Action ExecuteAtTimeout = null)
+      private Timer _timeout;
+      protected Action Cancel;
+      private NameValueCollection _dictionary;
+      private readonly Action _elapse;
+      private readonly Action<string> _execute; // Parser = Sub(Html As String)
+      private readonly Action _executeAtTimeout;
+      public string Html;
+      protected Func<string> Upload;
+      protected Action UploadAsync;
+
+      public BaseWebReader(bool async, string url, Action<string> parser, Action elapse,
+        NameValueCollection dictionary = null, int secTimeout = 0, Action executeAtTimeout = null)
       {
-        Execute = Parser;
-        this.Elapse = Elapse;
-        this.ExecuteAtTimeout = ExecuteAtTimeout;
-        this.Dictionary = Dictionary;
-        if (SecTimeout != 0)
-        {
-          Timeout = new System.Timers.Timer();
-          Timeout.Interval = TimeSpan.FromSeconds(SecTimeout).TotalMilliseconds;
-          Timeout.Start();
-        }
+        _execute = parser;
+        _elapse = elapse;
+        _executeAtTimeout = executeAtTimeout;
+        _dictionary = dictionary;
+        if (secTimeout == 0) return;
+        Timeout = new Timer {Interval = TimeSpan.FromSeconds(secTimeout).TotalMilliseconds};
+        Timeout.Start();
       }
-      private NameValueCollection Dictionary;
-      private Action<string> Execute; // Parser = Sub(Html As String)
-      private Action Elapse;
-      private Action ExecuteAtTimeout;
-      private System.Timers.Timer _Timeout;
-      private System.Timers.Timer Timeout
+
+      private Timer Timeout
       {
         [MethodImpl(MethodImplOptions.Synchronized)]
-        get
-        {
-          return _Timeout;
-        }
+        get => _timeout;
 
         [MethodImpl(MethodImplOptions.Synchronized)]
         set
         {
-          if (_Timeout != null)
-          {
-            _Timeout.Elapsed -= Timeout_Tick;
-          }
+          if (_timeout != null) _timeout.Elapsed -= Timeout_Tick;
 
-          _Timeout = value;
-          if (_Timeout != null)
-          {
-            _Timeout.Elapsed += Timeout_Tick;
-          }
+          _timeout = value;
+          if (_timeout != null) _timeout.Elapsed += Timeout_Tick;
         }
       }
-      private void Timeout_Tick(object sender, System.EventArgs e)
+
+      private void Timeout_Tick(object sender, EventArgs e)
       {
         Cancel();
-        if (ExecuteAtTimeout != null)
-          ExecuteAtTimeout.Invoke();
+        _executeAtTimeout?.Invoke();
       }
+
       public void CancelAsync()
       {
-        if (Timeout != null)
-          Timeout.Stop();
+        Timeout?.Stop();
         Cancel();
       }
-      protected Action Cancel;
-      protected Action UploadAsync;
-      protected Func<string> Upload;
-      protected void Start(string Url, bool Async)
+
+      protected void Start(string url, bool async)
       {
-        if (Dictionary == null)
-          Dictionary = new NameValueCollection();
-        if (Async)
+        if (_dictionary == null)
+          _dictionary = new NameValueCollection();
+        if (async)
+        {
           UploadAsync();
+        }
         else
         {
+#if !DEBUG
           try
           {
-            HTML = Upload();
+#endif
+          Html = Upload();
+#if !DEBUG
           }
           catch (Exception ex)
           {
             System.Diagnostics.Debug.Print(ex.Message);
             System.Diagnostics.Debugger.Break();
           }
-          if (Execute != null && HTML != null)
-            Execute(HTML);
-          Elapse?.Invoke();
+#endif
+          if (_execute != null && Html != null)
+            _execute(Html);
+          _elapse?.Invoke();
         }
       }
-      public string HTML;
-      internal void OpenReadCompleted(string HTML, bool Error, bool Cancelled)
+
+      internal void OpenReadCompleted(string html, bool error, bool cancelled)
       {
-        if (Error == false && Cancelled == false)
+        if (error == false && cancelled == false)
         {
-          this.HTML = HTML;
-          if (Execute != null && HTML != null)
-            Execute(HTML);
+          Html = html;
+          if (_execute != null && html != null)
+            _execute(html);
         }
-        Elapse?.Invoke();
+
+        _elapse?.Invoke();
       }
-      internal void OpenReadCompleted(Stream Result, bool Error, bool Cancelled, string ContentType)
+
+      internal void OpenReadCompleted(Stream result, bool error, bool cancelled, string contentType)
       {
-        if (Timeout != null)
-          Timeout.Stop();
-        if (Error == false && Cancelled == false)
+        Timeout?.Stop();
+        if (error == false && cancelled == false)
         {
-          System.IO.BinaryReader BinaryStreamReader = new System.IO.BinaryReader(Result);
-          byte[] Bytes;
-          Bytes = BinaryStreamReader.ReadBytes(System.Convert.ToInt32(BinaryStreamReader.BaseStream.Length));
-          if (Bytes != null)
+          var binaryStreamReader = new BinaryReader(result);
+          var bytes = binaryStreamReader.ReadBytes(Convert.ToInt32(binaryStreamReader.BaseStream.Length));
+          if (bytes.Length != 0)
           {
-            System.Text.Encoding Encoding = null;
-            if (ContentType != "")
+            Encoding encoding = null;
+            if (contentType != "")
             {
-              string[] Parts = ContentType.Split('=');
-              if (Parts.Length == 2)
-              {
+              var parts = contentType.Split('=');
+              if (parts.Length == 2)
                 try
                 {
-                  Encoding = System.Text.Encoding.GetEncoding(Parts[1]);
+                  encoding = Encoding.GetEncoding(parts[1]);
                 }
                 catch (Exception ex)
                 {
-                  System.Diagnostics.Debug.Print(ex.Message);
-                  System.Diagnostics.Debugger.Break();
+                  Debug.Print(ex.Message);
+                  Debugger.Break();
                 }
-              }
             }
 
-            if (Encoding == null)
+            if (encoding == null)
             {
-              var Row = System.Text.Encoding.UTF8.GetString(Bytes, 0, Bytes.Length);
-              if (Row != "")
-              {
+              var row = Encoding.UTF8.GetString(bytes, 0, bytes.Length);
+              if (row != "")
                 try
                 {
-                  int P1 = Row.IndexOf("charset=") + 1;
-                  if (P1 > 0)
+                  var p1 = row.IndexOf("charset=", StringComparison.Ordinal) + 1;
+                  if (p1 > 0)
                   {
-                    if (Row[P1 + 7] == '"')
-                      P1 += 9;
+                    if (row[p1 + 7] == '"')
+                      p1 += 9;
                     else
-                      P1 += 8;
-                    int P2 = Row.IndexOf("\"", P1);
-                    if (P2 > 0)
+                      p1 += 8;
+                    var p2 = row.IndexOf("\"", p1, StringComparison.Ordinal);
+                    if (p2 > 0)
                     {
-                      var EncodeStr = Row.Substring(P1 - 1, P2 - P1);
+                      var encodeStr = row.Substring(p1 - 1, p2 - p1);
                       try
                       {
-                        Encoding = System.Text.Encoding.GetEncoding(EncodeStr); // http://msdn.microsoft.com/library/vstudio/system.text.encoding(v=vs.100).aspx
+                        encoding = Encoding
+                          .GetEncoding(
+                            encodeStr); // http://msdn.microsoft.com/library/vstudio/system.text.encoding(v=vs.100).aspx
                       }
                       catch (Exception ex)
                       {
-                        System.Diagnostics.Debug.Print(ex.Message);
-                        System.Diagnostics.Debugger.Break();
+                        Debug.Print(ex.Message);
+                        Debugger.Break();
                       }
                     }
                   }
                 }
                 catch (Exception ex)
                 {
-                  System.Diagnostics.Debug.Print(ex.Message);
-                  System.Diagnostics.Debugger.Break();
+                  Debug.Print(ex.Message);
+                  Debugger.Break();
                 }
-              }
             }
-            if (Encoding != null)
+
+            if (encoding != null)
             {
-              HTML = Encoding.GetString(Bytes, 0, Bytes.Length);
-              if (Execute != null && HTML != null)
-                Execute(HTML);
+              Html = encoding.GetString(bytes, 0, bytes.Length);
+              if (_execute != null && Html != null)
+                _execute(Html);
             }
           }
         }
-        Elapse?.Invoke();
+
+        _elapse?.Invoke();
       }
     }
+
     public class VirtualWebClient
     {
-      public string Error;
+      private string _result;
       public bool Cancelled;
-      private string _Result;
-      public string Result { get { return _Result; } set { _Result = value; OpenReadCompleted(this, null); } }
+      private int _currentWebRequest;
+      public string Error;
+      public NameValueCollection ResponseHeaders;
+
+      public string Result
+      {
+        get => _result;
+        private set
+        {
+          _result = value;
+          OpenReadCompleted?.Invoke(this, null);
+        }
+      }
+
       public void CancelAsync()
       {
+      }
 
-      }
-      public void UploadValuesAsync(string address, string method, NameValueCollection Form, VirtualDevice VirtualDevice, string MyIp)
+      public void UploadValuesAsync(string address, string method, NameValueCollection form,
+        VirtualDevice virtualDevice, string myIp)
       {
-        new System.Threading.Thread(() =>
-        {
-          Result = UploadValues(address, method, Form, VirtualDevice, MyIp);
-        }).Start();
+        new Thread(() => { Result = UploadValues(address, method, form, virtualDevice, myIp); }).Start();
       }
-      public string UploadValues(string address, string method, NameValueCollection Form, VirtualDevice VirtualDevice, string MyIp)
+
+      public string UploadValues(string address, string method, NameValueCollection form, VirtualDevice virtualDevice,
+        string myIp)
       {
         Error = null;
         Cancelled = false;
-        if (VirtualDevice != null)
-        {
-          Uri myUri = new Uri(address);
-          var QueryString = System.Web.HttpUtility.ParseQueryString(myUri.Query);
-          //var Stream = new MemoryStream();
-          var Response = VirtualDevice.Device.WebServer(new Device.BaseDevice.WebRequest(QueryString, Form ?? new NameValueCollection(), MyIp));
-          Result = Response?.Text;
-          return Result;
-        }
-        return null;
+        if (!virtualDevice.IsOnline) return Result;
+        var time = DateTime.Now.ToUniversalTime();
+        _currentWebRequest += 1;
+        var myUri = new Uri(address);
+        var queryString = HttpUtility.ParseQueryString(myUri.Query);
+        var response =
+          virtualDevice.Device.WebServer(
+            new Device.BaseDevice.WebRequest(queryString, form ?? new NameValueCollection(), myIp));
+        Result = response?.Text;
+        var mb = Result == null ? 0 : Result.Length / 1048576f;
+        // It is empirical but excellent for simulating the network speed as set by the Virtual Device
+        var pauseMs = (int)(mb / virtualDevice.NetSpeed * 1000 * _currentWebRequest);
+        var msFromTime = (int)(DateTime.Now.ToUniversalTime() - time).TotalMilliseconds;
+        pauseMs -= msFromTime;
+        if (pauseMs > 0)
+          Thread.Sleep(pauseMs);
+        _currentWebRequest -= 1;
+        return Result;
       }
-      public NameValueCollection ResponseHeaders;
+
       public event EventHandler OpenReadCompleted;
     }
+
     public class ObjectVector
     {
+      public readonly string FromUser;
+      public readonly string ObjectName;
+      public readonly string XmlObject;
+
       public ObjectVector()
       {
       }
-      public ObjectVector(string FromUser, string ObjectName, string XmlObject)
+
+      public ObjectVector(string fromUser, string objectName, string xmlObject)
       {
-        this.FromUser = FromUser; this.ObjectName = ObjectName; this.XmlObject = XmlObject;
+        FromUser = fromUser;
+        ObjectName = objectName;
+        XmlObject = xmlObject;
       }
-      public ObjectVector(string FromUser, object Obj)
+
+      public ObjectVector(string fromUser, object obj)
       {
-        this.FromUser = FromUser;
-        ObjectName = Obj.GetType().Name;
+        FromUser = fromUser;
+        ObjectName = obj.GetType().Name;
 
-        System.Xml.Serialization.XmlSerializer XmlSerializer = new System.Xml.Serialization.XmlSerializer(Obj.GetType());
+        var xmlSerializer = new XmlSerializer(obj.GetType());
 
-        using (System.IO.StringWriter textWriter = new System.IO.StringWriter())
+        using (var textWriter = new StringWriter())
         {
-          XmlSerializer.Serialize(textWriter, Obj);
+          xmlSerializer.Serialize(textWriter, obj);
           XmlObject = textWriter.ToString();
         }
       }
-      public string FromUser;
-      public string ObjectName;
-      public string XmlObject;
     }
   }
 }

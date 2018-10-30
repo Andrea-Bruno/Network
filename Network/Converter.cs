@@ -1,54 +1,47 @@
 ﻿using System;
-using System.Collections.Generic;
-
 
 namespace NetworkManager
 {
   public static class Converter
   {
-    public static uint IpToUint(string IP) {
-      var address = System.Net.IPAddress.Parse(IP);
-      byte[] bytes = address.GetAddressBytes();
+    public static uint IpToUint(string ip) {
+      var address = System.Net.IPAddress.Parse(ip);
+      var bytes = address.GetAddressBytes();
       Array.Reverse(bytes); // flip big-endian(network order) to little-endian
       return BitConverter.ToUInt32(bytes, 0);
     }
-    public static string UintToIp(uint IP)
+    public static string UintToIp(uint ip)
     {
-      byte[] bytes = BitConverter.GetBytes(IP);
+      var bytes = BitConverter.GetBytes(ip);
       Array.Reverse(bytes); // flip little-endian to big-endian(network order)
       return new System.Net.IPAddress(bytes).ToString();
     }
-    public static string StringToBase64(string Text)
+    public static string StringToBase64(string text)
     {
       // This function is a quick way to crypt a text string
-      byte[] Bytes = StringToByteArray(Text);
-      return Convert.ToBase64String(Bytes);
+      var bytes = StringToByteArray(text);
+      return Convert.ToBase64String(bytes);
     }
-    public static string Base64ToString(string Text)
+    public static string Base64ToString(string text)
     {
       // Now easy to decrypt a data
-      byte[] Bytes = Convert.FromBase64String(Text);
-      return ByteArrayToString(Bytes);
+      var bytes = Convert.FromBase64String(text);
+      return ByteArrayToString(bytes);
     }
-    public static byte[] StringToByteArray(string Text)
+    public static byte[] StringToByteArray(string text)
     {
-      if (!string.IsNullOrEmpty(Text))
-      {
-        // The object System.Text.Encoding.Unicode have a problem in Windows x64. Replache this object with System.Text.Encoding.GetEncoding("utf-16LE") 
-        return System.Text.Encoding.GetEncoding("utf-16LE").GetBytes(Text);// Unicode encoding
-      }
-      return null;
+      return !string.IsNullOrEmpty(text) ? System.Text.Encoding.GetEncoding("utf-16LE").GetBytes(text) : null;
     }
-    public static string ByteArrayToString(byte[] Bytes)
+    public static string ByteArrayToString(byte[] bytes)
     {
-      return System.Text.Encoding.GetEncoding("utf-16LE").GetString(Bytes);// Unicode encodin
+      return System.Text.Encoding.GetEncoding("utf-16LE").GetString(bytes);// Unicode encodin
     }
-    public static bool XmlToObject(string Xml, Type Type, out object Obj)
+    public static bool XmlToObject(string xml, Type type, out object obj)
     {
-      System.Xml.Serialization.XmlSerializer XmlSerializer = new System.Xml.Serialization.XmlSerializer(Type);
+      var xmlSerializer = new System.Xml.Serialization.XmlSerializer(type);
       try
       {
-        Obj = XmlSerializer.Deserialize(new System.IO.StringReader(Xml));
+        obj = xmlSerializer.Deserialize(new System.IO.StringReader(xml));
         return true;
       }
       catch (Exception ex)
@@ -56,9 +49,19 @@ namespace NetworkManager
         System.Diagnostics.Debug.Print(ex.Message);
         System.Diagnostics.Debugger.Break();
       }
-      Obj = null;
+      obj = null;
       return false;
     }
+    public static string ObjectToXml(object obj)
+    {
+      var str = new System.IO.StringWriter();
+      var xml = new System.Xml.Serialization.XmlSerializer(obj.GetType());
+      var xmlns = new System.Xml.Serialization.XmlSerializerNamespaces();
+      xmlns.Add(string.Empty, string.Empty);
+      xml.Serialize(str, obj, xmlns);
+      return str.ToString();
+    }
+
   }
 
 }
