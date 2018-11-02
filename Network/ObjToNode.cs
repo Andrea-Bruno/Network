@@ -1,7 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text;
+using System.Runtime.Serialization;
 
 namespace NetworkManager
 {
@@ -16,41 +16,54 @@ namespace NetworkManager
     public ObjToNode() { GetElement = new Element(); }
     public ObjToNode(Element element) { GetElement = element; }
     public int Level;
-    public string XmlObject { get => GetElement.XmlObject;
-      set => GetElement.XmlObject = value;
-    }
-    public long Timestamp { get => GetElement.Timestamp;
-      set => GetElement.Timestamp = value;
-    }
+    [DataMember]
+    public string XmlObject { get => GetElement.XmlObject; set => GetElement.XmlObject = value; }
+    [DataMember]
+    public long Timestamp { get => GetElement.Timestamp; set => GetElement.Timestamp = value; }
     public string TimestampSignature;
     /// <summary>
     /// Class used exclusively to transmit the timestamp certificates to the node who sent the object to be signed
     /// </summary>
     public class TimestampVector
     {
-      // "int" is the short hash of ObjToNode and "string" is the SignedTimestamp for the single ObjToNode
-      public Dictionary<int, string> SignedTimestamp = new Dictionary<int, string>();
+      /// <summary>
+      /// "int" is the short hash of ObjToNode and "string" is the SignedTimestamp for the single ObjToNode
+      /// </summary>
+      internal Dictionary<int, string> SignedTimestamp = new Dictionary<int, string>();
+      // Used exclusively to serialize the dictionary
+      public List<KeyValuePair<int,string>> Signatures
+      {
+        get => SignedTimestamp.ToList();
+        set { SignedTimestamp = value.ToDictionary(pair => pair.Key, pair => pair.Value); }
+      }
     }
     internal int ShortHash;
     private byte[] Hash()
     {
       var data = BitConverter.GetBytes(Timestamp).Concat(Converter.StringToByteArray(XmlObject)).ToArray();
-      var hashBytes =Utility.GetHash(data);
+      var hashBytes = Utility.GetHash(data);
       ShortHash = hashBytes.GetHashCode();
       return hashBytes;
     }
+
     /// <summary>
     /// Check the node that sent this object, have assigned a correct timestamp, if so it generates its own signature.
     /// </summary>
     /// <param name="myNode">Your own Node</param>
+    /// <param name="now">Current date and time</param>
     /// <returns>Returns the signature if the timestamp assigned by the node is correct, otherwise null</returns>
     internal string CreateTheSignatureForTheTimestamp(Node myNode, DateTime now)
     {
       var thisMoment = now;
       var dt = new DateTime(Timestamp);
       const double margin = 0.5; // ***Calculates a margin because the clocks on the nodes may not be perfectly synchronized
-      if (thisMoment < dt.AddSeconds(-margin)) return null;
-      const int maximumTimeToTransmitTheDataOnTheNode = 2; // In seconds
+      if (thisMoment < dt.AddSeconds(-margin))
+      {
+        Utility.Log("signature", "signature rejected for incongruous timestamp");
+        System.Diagnostics.Debugger.Break();
+        return null;
+      }
+      const int maximumTimeToTransmitTheDataOnTheNode = 2; // ***In seconds
       return thisMoment <= dt.AddSeconds(maximumTimeToTransmitTheDataOnTheNode + margin) ? GetTimestampSignature(myNode) : null;
     }
     private string GetTimestampSignature(Node node)
@@ -69,12 +82,10 @@ namespace NetworkManager
     /// Check if all the nodes responsible for distributing this data have put their signature on the timestamp
     /// </summary>
     /// <param name="network"></param>
-    /// <param name="CurrentNodeList"></param>
-    /// <param name="NodesRemoved"></param>
     /// <returns>Result of the operation</returns>
     internal CheckSignedTimestampResult CheckSignedTimestamp(Network network)
     {
-      var currentNodeList = network.CurrentNodes();
+      var currentNodeList = network.NodeList.CurrentAndRecentNodes();
       var lenT = 30; System.Diagnostics.Debugger.Break();
       //Valore da verificare
       var signedTimestamps = Convert.FromBase64String(TimestampSignature);

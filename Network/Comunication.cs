@@ -16,7 +16,7 @@ namespace NetworkManager
   /// <summary>
   ///   It creates communication mechanisms that can be used by a protocol to communicate between nodes via the Internet
   /// </summary>
-  public class Comunication
+  public class Communication
   {
     public delegate void OnReceivedObject(string fromUser, string objectName, string xmlObject);
 
@@ -25,7 +25,7 @@ namespace NetworkManager
     private readonly string _masterServerMachineName;
     private readonly Network _network;
 
-    public Comunication(Network network, string masterServerMachineName = null, string masterServer=null)
+    public Communication(Network network, string masterServerMachineName = null, string masterServer = null)
     {
       _network = network;
       _masterServerMachineName = masterServerMachineName;
@@ -34,38 +34,38 @@ namespace NetworkManager
 
     public string SendObjectSync(object obj, string webAddress = null, NameValueCollection form = null,
       string toUser = null, int secTimeOut = 0, int secWaitAnswer = 0, Action executeIfNoAnswer = null,
-      bool cancellAllMyRequest = false, bool removeObjectsToMe = false, bool removeMyObjects = false)
+      bool cancelAllMyRequest = false, bool removeObjectsToMe = false, bool removeMyObjects = false)
     {
       var reader = ExecuteServerRequest(false, webAddress, null, obj, form, null, secWaitAnswer, executeIfNoAnswer,
-        secTimeOut, toUser, cancellAllMyRequest, removeObjectsToMe, removeMyObjects);
+        secTimeOut, toUser, cancelAllMyRequest, removeObjectsToMe, removeMyObjects);
       return reader.Html;
     }
 
     public BaseWebReader SendObjectAsync(ref object obj, string webAddress = null, NameValueCollection form = null,
       string toUser = null, int secTimeOut = 0, int secWaitAnswer = 0, OnReceivedObject executeOnReceivedObject = null,
-      Action executeIfNoAnswer = null, bool cancellAllMyRequest = false, bool removeObjectsToMe = false,
+      Action executeIfNoAnswer = null, bool cancelAllMyRequest = false, bool removeObjectsToMe = false,
       bool removeMyObjects = false)
     {
       return ExecuteServerRequest(true, webAddress, null, obj, form, executeOnReceivedObject, secWaitAnswer,
-        executeIfNoAnswer, secTimeOut, toUser, cancellAllMyRequest, removeObjectsToMe, removeMyObjects);
+        executeIfNoAnswer, secTimeOut, toUser, cancelAllMyRequest, removeObjectsToMe, removeMyObjects);
     }
 
     public string GetObjectSync(string webAddress = null, string request = null, object obj = null,
-      string toUser = null, int secWaitAnswer = 0, Action executeIfNoAnswer = null, bool cancellAllMyRequest = false,
+      string toUser = null, int secWaitAnswer = 0, Action executeIfNoAnswer = null, bool cancelAllMyRequest = false,
       bool removeObjectsToMe = false, bool removeMyObjects = false)
     {
       var reader = ExecuteServerRequest(false, webAddress, request, obj, null, null, secWaitAnswer, executeIfNoAnswer,
-        0, toUser, cancellAllMyRequest, removeObjectsToMe, removeMyObjects);
+        0, toUser, cancelAllMyRequest, removeObjectsToMe, removeMyObjects);
       return reader.Html;
     }
 
     public BaseWebReader GetObjectAsync(OnReceivedObject executeOnReceivedObject, string webAddress = null,
       string request = null, object obj = null, string toUser = null, int secWaitAnswer = 0,
-      Action executeIfNoAnswer = null, bool cancellAllMyRequest = false, bool removeObjectsToMe = false,
+      Action executeIfNoAnswer = null, bool cancelAllMyRequest = false, bool removeObjectsToMe = false,
       bool removeMyObjects = false)
     {
       return ExecuteServerRequest(true, webAddress, request, obj, null, executeOnReceivedObject, secWaitAnswer,
-        executeIfNoAnswer, 0, toUser, cancellAllMyRequest, removeObjectsToMe, removeMyObjects);
+        executeIfNoAnswer, 0, toUser, cancelAllMyRequest, removeObjectsToMe, removeMyObjects);
     }
 
     private string UrlServer()
@@ -76,15 +76,15 @@ namespace NetworkManager
     private BaseWebReader ExecuteServerRequest(bool async, string webAddress = null, string request = null,
       object obj = null, NameValueCollection form = null, OnReceivedObject executeOnReceivedObject = null,
       int secWaitAnswer = 0, Action executeIfNoAnswer = null, int secTimeOut = 0, string toUser = null,
-      bool cancellAllMyRequest = false, bool removeObjectsToMe = false, bool removeMyObjects = false)
+      bool cancelAllMyRequest = false, bool removeObjectsToMe = false, bool removeMyObjects = false)
     {
       if (webAddress == null)
         webAddress = UrlServer();
       webAddress = webAddress.TrimEnd('/');
       webAddress += "?network=" + Uri.EscapeDataString(_network.NetworkName) + "&app=" + Uri.EscapeDataString(_appName) +
                     "&fromuser=" + Uri.EscapeDataString(Environment.MachineName) + "&secwaitanswer=" + secWaitAnswer;
-      if (cancellAllMyRequest)
-        webAddress += "&cancellrequest=true";
+      if (cancelAllMyRequest)
+        webAddress += "&cancelrequest=true";
       if (removeObjectsToMe)
       {
         webAddress += "&removeobjects=true";
@@ -103,8 +103,8 @@ namespace NetworkManager
       if (executeOnReceivedObject != null)
         parser = html =>
         {
-          Converter.XmlToObject(html, typeof(ObjectVector), out var returmObj);
-          var objectVector = (ObjectVector)returmObj;
+          Converter.XmlToObject(html, typeof(ObjectVector), out var returnObj);
+          var objectVector = (ObjectVector)returnObj;
           if (objectVector != null)
             executeOnReceivedObject.Invoke(objectVector.FromUser, objectVector.ObjectName, objectVector.XmlObject);
         };
@@ -133,14 +133,14 @@ namespace NetworkManager
         : (BaseWebReader)ReadWeb(async, webAddress, parser, null, form, secWaitAnswer, executeIfNoAnswer);
     }
 
-    public static VirtualWebReader VirtualReadWeb(bool async, string myIp, string url, Action<string> parser,
+    private static VirtualWebReader VirtualReadWeb(bool async, string myIp, string url, Action<string> parser,
       Action elapse, NameValueCollection form = null, int secTimeout = 0, Action executeAtTimeout = null,
       VirtualDevice sendRequestTo = null)
     {
       return new VirtualWebReader(async, myIp, url, parser, elapse, form, secTimeout, executeAtTimeout, sendRequestTo);
     }
 
-    public static WebReader ReadWeb(bool async, string url, Action<string> parser, Action elapse,
+    private static WebReader ReadWeb(bool async, string url, Action<string> parser, Action elapse,
       NameValueCollection form = null, int secTimeout = 0, Action executeAtTimeout = null)
     {
       return new WebReader(async, url, parser, elapse, form, secTimeout, executeAtTimeout);
@@ -185,15 +185,15 @@ namespace NetworkManager
       private void WebClient_OpenReadCompleted(object sender, EventArgs e)
       {
         var error = VirtualWebClient.Error != null;
-        var cancelled = false;
+        var canceled = false;
         if (error)
-          cancelled = VirtualWebClient.Cancelled;
+          canceled = VirtualWebClient.Canceled;
         var html = VirtualWebClient.Result;
-        OpenReadCompleted(html, error, cancelled);
+        OpenReadCompleted(html, error, canceled);
       }
     }
 
-    public class WebReader : BaseWebReader
+    private class WebReader : BaseWebReader
     {
       private WebClient _webClient;
 
@@ -232,9 +232,7 @@ namespace NetworkManager
       {
         var contentType = WebClient.ResponseHeaders?["Content-Type"];
         var error = e.Error != null;
-        var cancelled = false;
-        if (error)
-          cancelled = e.Cancelled;
+        var cancelled = error && e.Cancelled;
         var result = e.Result;
         OpenReadCompleted(result, error, cancelled, contentType);
       }
@@ -252,15 +250,14 @@ namespace NetworkManager
       protected Func<string> Upload;
       protected Action UploadAsync;
 
-      public BaseWebReader(bool async, string url, Action<string> parser, Action elapse,
-        NameValueCollection dictionary = null, int secTimeout = 0, Action executeAtTimeout = null)
+      protected BaseWebReader(bool async, string url, Action<string> parser, Action elapse, NameValueCollection dictionary = null, int secTimeout = 0, Action executeAtTimeout = null)
       {
         _execute = parser;
         _elapse = elapse;
         _executeAtTimeout = executeAtTimeout;
         _dictionary = dictionary;
         if (secTimeout == 0) return;
-        Timeout = new Timer {Interval = TimeSpan.FromSeconds(secTimeout).TotalMilliseconds};
+        Timeout = new Timer { Interval = TimeSpan.FromSeconds(secTimeout).TotalMilliseconds };
         Timeout.Start();
       }
 
@@ -320,9 +317,9 @@ namespace NetworkManager
         }
       }
 
-      internal void OpenReadCompleted(string html, bool error, bool cancelled)
+      internal void OpenReadCompleted(string html, bool error, bool canceled)
       {
-        if (error == false && cancelled == false)
+        if (error == false && canceled == false)
         {
           Html = html;
           if (_execute != null && html != null)
@@ -332,10 +329,10 @@ namespace NetworkManager
         _elapse?.Invoke();
       }
 
-      internal void OpenReadCompleted(Stream result, bool error, bool cancelled, string contentType)
+      internal void OpenReadCompleted(Stream result, bool error, bool canceled, string contentType)
       {
         Timeout?.Stop();
-        if (error == false && cancelled == false)
+        if (error == false && canceled == false)
         {
           var binaryStreamReader = new BinaryReader(result);
           var bytes = binaryStreamReader.ReadBytes(Convert.ToInt32(binaryStreamReader.BaseStream.Length));
@@ -408,10 +405,10 @@ namespace NetworkManager
       }
     }
 
-    public class VirtualWebClient
+    private class VirtualWebClient
     {
       private string _result;
-      public bool Cancelled;
+      public bool Canceled;
       private int _currentWebRequest;
       public string Error;
       public NameValueCollection ResponseHeaders;
@@ -440,7 +437,7 @@ namespace NetworkManager
         string myIp)
       {
         Error = null;
-        Cancelled = false;
+        Canceled = false;
         if (!virtualDevice.IsOnline) return Result;
         var time = DateTime.Now.ToUniversalTime();
         _currentWebRequest += 1;

@@ -36,10 +36,18 @@ namespace NetworkManager
     }
     internal void GetXy(Node node, List<Node> nodeList, out int x, out int y)
     {
-      var position = nodeList.IndexOf(node);
-      var side = SquareSide(nodeList.Count);
-      x = position % side;
-      y = (int)position / side;
+      if (nodeList.Count == 0)
+      {
+        x = -1;
+        y = -1;
+      }
+      else
+      {
+        var position = nodeList.IndexOf(node);
+        var side = SquareSide(nodeList.Count);
+        x = position % side;
+        y = (int)position / side;
+      }
     }
 
     internal Node GetNodeAtPosition(List<Node> nodeList, int x, int y)
@@ -85,9 +93,12 @@ namespace NetworkManager
     internal List<Node> GetConnections(int level, Node node, List<Node> nodeList)
     {
       // return GetConnections(Level, X, Y);
+      var list = new List<Node>();
+      if (nodeList.Count == 0) return list;
       var distance = SquareSide(nodeList.Count) / (int)Math.Pow(3, level);
       if (distance < 1)
-        distance = 1; int xNode, yNode;
+        distance = 1;
+      int xNode, yNode;
       if (node != _network.MyNode || nodeList != _network.NodeList)
         GetXy(node, nodeList, out xNode, out yNode);
       else
@@ -95,7 +106,7 @@ namespace NetworkManager
         xNode = _myX;
         yNode = _myY;
       }
-      var list = new List<Node>();
+
       for (var upDown = -1; upDown <= 1; upDown++)
         for (var leftRight = -1; leftRight <= 1; leftRight++)
           if (leftRight != 0 || upDown != 0)

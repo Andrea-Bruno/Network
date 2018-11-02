@@ -11,7 +11,7 @@ namespace NetworkManager
   {
     public delegate object GetObject(string xmlObject);
 
-    public enum StandardAnsware
+    public enum StandardAnswer
     {
       Ok,
       Disconnected,
@@ -19,16 +19,16 @@ namespace NetworkManager
       DuplicateIp,
       TooSlow,
       Failure,
-      NoAnsware,
+      NoAnswer,
       Declined,
       IpError,
-      Unauthorized
+      Unauthorized,
     }
 
     private readonly int _speedLimit = 1000;
     private readonly Network _network;
-    internal Dictionary<string, GetObject> OnReceivingObjectsActions = new Dictionary<string, GetObject>();
-    internal Dictionary<string, GetObject> OnRequestActions = new Dictionary<string, GetObject>();
+    internal readonly Dictionary<string, GetObject> OnReceivingObjectsActions = new Dictionary<string, GetObject>();
+    internal readonly Dictionary<string, GetObject> OnRequestActions = new Dictionary<string, GetObject>();
 
     internal Protocol(Network network)
     {
@@ -70,7 +70,7 @@ namespace NetworkManager
         //  ToNode = GetRandomNode();
         if (toNode == null)
           return "";
-        xmlResult = _network.Comunication.GetObjectSync(toNode.Address, request, obj, toNode.MachineName + ".");
+        xmlResult = _network.Communication.GetObjectSync(toNode.Address, request, obj, toNode.MachineName + ".");
       } while (string.IsNullOrEmpty(xmlResult) && Try <= 10);
       if (Try <= 10) return xmlResult;
       Debugger.Break();
@@ -90,19 +90,19 @@ namespace NetworkManager
       var xmlResult = SendRequest(entryPoint, StandardMessages.NetworkNodes);
       if (string.IsNullOrEmpty(xmlResult))
         return new List<Node>();
-      Converter.XmlToObject(xmlResult, typeof(List<Node>), out var returmObj);
-      var nodeList = (List<Node>) returmObj;
+      Converter.XmlToObject(xmlResult, typeof(List<Node>), out var returnObj);
+      var nodeList = (List<Node>)returnObj;
       return nodeList;
     }
 
-    internal StandardAnsware ImOffline(Node toNode, Node myNode)
+    internal StandardAnswer ImOffline(Node toNode, Node myNode)
     {
       var xmlResult = SendRequest(toNode, StandardMessages.ImOffline, myNode);
-      if (string.IsNullOrEmpty(xmlResult)) return StandardAnsware.Error;
+      if (string.IsNullOrEmpty(xmlResult)) return StandardAnswer.Error;
       try
       {
-        Converter.XmlToObject(xmlResult, typeof(StandardAnsware), out var answare);
-        return (StandardAnsware) answare;
+        Converter.XmlToObject(xmlResult, typeof(StandardAnswer), out var answer);
+        return (StandardAnswer)answer;
       }
       catch (Exception ex)
       {
@@ -110,18 +110,18 @@ namespace NetworkManager
         Debugger.Break();
       }
 
-      return StandardAnsware.Error;
+      return StandardAnswer.Error;
     }
 
-    internal StandardAnsware ImOnline(Node toNode, Node myNode)
+    internal StandardAnswer ImOnline(Node toNode, Node myNode)
     {
       var xmlResult = SendRequest(toNode, StandardMessages.ImOnline, myNode);
       if (string.IsNullOrEmpty(xmlResult))
-        return StandardAnsware.NoAnsware;
+        return StandardAnswer.NoAnswer;
       try
       {
-        Converter.XmlToObject(xmlResult, typeof(StandardAnsware), out var answare);
-        return (StandardAnsware) answare;
+        Converter.XmlToObject(xmlResult, typeof(StandardAnswer), out var answer);
+        return (StandardAnswer)answer;
       }
       catch (Exception ex)
       {
@@ -129,7 +129,7 @@ namespace NetworkManager
         Debugger.Break();
       }
 
-      return StandardAnsware.Error;
+      return StandardAnswer.Error;
     }
 
     internal Stats GetStats(Node fromNode)
@@ -141,8 +141,8 @@ namespace NetworkManager
         return null;
       try
       {
-        Converter.XmlToObject(xmlResult, typeof(Stats), out var returmObj);
-        stats = (Stats) returmObj;
+        Converter.XmlToObject(xmlResult, typeof(Stats), out var returnObj);
+        stats = (Stats)returnObj;
       }
       catch (Exception ex)
       {
@@ -159,7 +159,7 @@ namespace NetworkManager
       var connections = _network.MappingNetwork.GetConnections(0);
       var speedSigned = SpeedTestSigned(nodeToTesting);
       speedTestResults.Add(speedSigned);
-      var speeds = new List<int> {speedSigned.Speed};
+      var speeds = new List<int> { speedSigned.Speed };
       if (connections.Count != 0)
         foreach (var node in connections)
         {
@@ -167,8 +167,8 @@ namespace NetworkManager
           if (!string.IsNullOrEmpty(xmlResult))
             try
             {
-              Converter.XmlToObject(xmlResult, typeof(SpeedTestResult), out var returmObj);
-              var result = (SpeedTestResult) returmObj;
+              Converter.XmlToObject(xmlResult, typeof(SpeedTestResult), out var returnObj);
+              var result = (SpeedTestResult)returnObj;
               speedTestResults.Add(result);
               if (result.VerifySignature(node, nodeToTesting.Ip))
               {
@@ -199,7 +199,7 @@ namespace NetworkManager
 
     internal SpeedTestResult SpeedTestSigned(Node nodeToTesting)
     {
-      var result = new SpeedTestResult {Speed = SpeedTest(nodeToTesting), NodeIp = _network.MyNode.Ip};
+      var result = new SpeedTestResult { Speed = SpeedTest(nodeToTesting), NodeIp = _network.MyNode.Ip };
       result.SignTheResult(_network.MyNode, nodeToTesting.Ip, _network.Now.Ticks);
       return result;
     }
@@ -214,35 +214,40 @@ namespace NetworkManager
           return -1;
       }
 
-      var speed = (int) (DateTime.UtcNow - start).TotalMilliseconds;
+      var speed = (int)(DateTime.UtcNow - start).TotalMilliseconds;
       return speed;
     }
 
+    /// <summary>
+    /// If the decentralized speed test is passed, then it propagates the notification on all the nodes that there is a new online node.
+    /// </summary>
+    /// <param name="node">The new node that has just been added</param>
+    /// <param name="speedTestResults">The certified result of the speed test</param>
+    /// <returns>Positive result if return true</returns>
     internal bool NotificationNewNodeIsOnline(Node node, List<SpeedTestResult> speedTestResults)
     {
-      var notification = new NodeOnlineNotification {Node = node, Signatures = speedTestResults};
+      var notification = new NodeOnlineNotification { Node = node, Signatures = speedTestResults };
       return _network.BufferManager.AddLocal(notification);
     }
 
-    internal StandardAnsware AddToSharedBuffer(Node toNode, object Object)
+    internal StandardAnswer AddToSharedBuffer(Node toNode, object Object)
     {
-      if (_network.ThisNode.ConnectionStatus != StandardAnsware.Ok)
+      if (_network.ThisNode.ConnectionStatus != StandardAnswer.Ok)
         return _network.ThisNode.ConnectionStatus;
       try
       {
         var xmlResult = SendRequest(toNode, StandardMessages.AddToBuffer, Object);
-        //var XmlResult = Comunication.SendObjectSync(Object, Node.Address, null, Node.MachineName);
-        if (string.IsNullOrEmpty(xmlResult)) return StandardAnsware.NoAnsware;
-
-        Converter.XmlToObject(xmlResult, typeof(StandardAnsware), out var returmObj);
-        var answare = (StandardAnsware) returmObj;
-        return answare;
+        //var XmlResult = Communication.SendObjectSync(Object, Node.Address, null, Node.MachineName);
+        if (string.IsNullOrEmpty(xmlResult)) return StandardAnswer.NoAnswer;
+        Converter.XmlToObject(xmlResult, typeof(StandardAnswer), out var returnObj);
+        var answer = (StandardAnswer)returnObj;
+        return answer;
       }
       catch (Exception ex)
       {
         Debug.Print(ex.Message);
         Debugger.Break();
-        return StandardAnsware.Error;
+        return StandardAnswer.Error;
       }
     }
 
@@ -269,30 +274,27 @@ namespace NetworkManager
         if (Utility.GetObjectName(xmlResult) == "TimestampVector")
           if (Converter.XmlToObject(xmlResult, typeof(ObjToNode.TimestampVector), out var objTimestampVector))
           {
-            var timestampVector = (ObjToNode.TimestampVector) objTimestampVector;
+            var timestampVector = (ObjToNode.TimestampVector)objTimestampVector;
             foreach (var element in elements)
               if (timestampVector.SignedTimestamp.TryGetValue(element.ShortHash, out var signedTimestamp))
                 element.TimestampSignature += signedTimestamp;
           }
-
         if (responseMonitor == null) return;
         {
           responseMonitor.ResponseCounter += 1;
-          if (responseMonitor.ResponseCounter == responseMonitor.Level0Connections.Count)
-          {
-            // All nodes connected to the zero level have signed the timestamp, now the signature of the timestamp of all the nodes must be sent to every single node.
-            // This operation is used to create a decentralized timestamp.
-            var timestampVector = new ObjToNode.TimestampVector();
-            foreach (var element in elements)
-              timestampVector.SignedTimestamp.Add(element.ShortHash, element.TimestampSignature);
-            foreach (var node in responseMonitor.Level0Connections)
-              SendTimestampSignatureToNode(timestampVector, node);
-          }
+          if (responseMonitor.ResponseCounter != responseMonitor.Level0Connections.Count) return;
+          // All nodes connected to the zero level have signed the timestamp, now the signature of the timestamp of all the nodes must be sent to every single node.
+          // This operation is used to create a decentralized timestamp.
+          var timestampVector = new ObjToNode.TimestampVector();
+          foreach (var element in elements)
+            timestampVector.SignedTimestamp.Add(element.ShortHash, element.TimestampSignature);
+          foreach (var node in responseMonitor.Level0Connections)
+            SendTimestampSignatureToNode(timestampVector, node);
         }
       }).Start();
     }
 
-    internal void SendTimestampSignatureToNode(ObjToNode.TimestampVector timestampVector, Node toNode)
+    private void SendTimestampSignatureToNode(ObjToNode.TimestampVector timestampVector, Node toNode)
     {
       new Thread(() =>
       {
@@ -310,7 +312,6 @@ namespace NetworkManager
       ImOffline,
       RequestTestSpeed,
       TestSpeed,
-      NotificationNewNodeIsOnline,
       AddToBuffer,
       SendElementsToNode,
       SendTimestampSignatureToNode,
@@ -331,12 +332,9 @@ namespace NetworkManager
       ///   IP of signature Node
       /// </summary>
       public uint NodeIp;
-
       public string Signature;
-
       public int Speed;
       public long Timestamp;
-
       private byte[] HashData(uint ipNodeToTesting)
       {
         var data = BitConverter.GetBytes(ipNodeToTesting).Concat(BitConverter.GetBytes(Speed))

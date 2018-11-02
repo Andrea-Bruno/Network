@@ -1,7 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text;
+using System.Timers;
 using static NetworkManager.Network;
 
 namespace NetworkManager
@@ -9,7 +9,7 @@ namespace NetworkManager
   /// <summary>
   /// The buffer is a mechanism that allows you to distribute objects on the network by assigning a timestamp.
   /// The objects inserted in the buffer will exit from it on all the nodes following the chronological order of input(they come out sorted by timestamp).
-  /// The data output from the buffar must be managed by actions that are programmed when the network is initialized.
+  /// The data output from the buffer must be managed by actions that are programmed when the network is initialized.
   /// </summary>
   internal class BufferManager
   {
@@ -17,13 +17,12 @@ namespace NetworkManager
     {
       _network = network;
       _spooler = new Spooler(network);
-      _bufferTimer = new System.Timers.Timer(1000) { AutoReset = true, Enabled = true };
-      _bufferTimer.Elapsed += (sender, e) => ToDoEverySec();
-
-      _newStats = new System.Timers.Timer(43200000) { AutoReset = true, Enabled = true };//Every 12h
-      _newStats.Elapsed += (sender, e) => NewStatsElapsed();
-
+      var bufferTimer = new Timer(1000) { AutoReset = true, Enabled = true };
+      bufferTimer.Elapsed += (sender, e) => Scheduler();
+      var newStats = new Timer(43200000) { AutoReset = true, Enabled = true };
+      newStats.Elapsed += (sender, e) => NewStatsElapsed();
     }
+
     private readonly Network _network;
     /// <summary>
     /// The spooler contains the logic that allows synchronization of data on the peer2peer network
@@ -35,12 +34,12 @@ namespace NetworkManager
     /// </summary>
     /// <param name="Object">Object to send</param>
     /// <returns></returns>
-    public Protocol.StandardAnsware AddToSaredBuffer(object Object)
+    public Protocol.StandardAnswer AddToSharedBuffer(object Object)
     {
       return _network.Protocol.AddToSharedBuffer(_network.GetRandomNode(), Object);
     }
-    private readonly System.Timers.Timer _bufferTimer;
-    private void ToDoEverySec()
+
+    private void Scheduler()
     {
       //var Buffer = BufferManager.Buffer;
       lock (Buffer)
@@ -49,6 +48,8 @@ namespace NetworkManager
         var thisTime = _network.Now;
         foreach (var item in Buffer)
         {
+          //For objects of level 0 the timestamp is added by the spooler at the time of forwarding in order to reduce the time difference between the timestamp and the reception of the object on the other node
+          if (item.Element.Timestamp == 0) continue;
           if ((thisTime - new DateTime(item.Element.Timestamp)) > _network.MappingNetwork.NetworkSyncTimeSpan)
           {
             toRemove.Add(item);
@@ -56,7 +57,7 @@ namespace NetworkManager
             OnReceiveObjectFromBuffer(objectName, item.Element.XmlObject, item.Element.Timestamp);
           }
           else
-            break;//because the beffer is sorted by Timespan
+            break;//because the buffer is sorted by Timespan
         }
         foreach (var item in toRemove)
           Buffer.Remove(item);
@@ -75,7 +76,7 @@ namespace NetworkManager
             Node nodeAtLevel0 = null;
             foreach (var item in nodeOnlineNotification.Signatures)
             {
-              var nodeOfSignature = _network.CurrentNodes().Find(x => x.Ip == item.NodeIp);
+              var nodeOfSignature = _network.NodeList.CurrentAndRecentNodes().Find(x => x.Ip == item.NodeIp);
               if (nodeOfSignature == null)
               {
                 invalid = true;
@@ -91,7 +92,7 @@ namespace NetworkManager
             }
             if (!invalid)
               if (_network.ValidateConnectionAtLevel0(nodeAtLevel0, connections))
-                _network.AddNode(nodeOnlineNotification.Node, timestamp);
+                _network.NodeList.Add(nodeOnlineNotification.Node, timestamp);
           }
         }
 
@@ -102,9 +103,9 @@ namespace NetworkManager
     }
     /// <summary>
     /// Insert the object in the local buffer to be synchronized
-    /// XmlObject is a new element inserted by an external user
+    /// Object is a new element inserted by an external user
     /// </summary>
-    /// <param name="XmlObject">Object im format xml</param>
+    /// <param name="Object">Object</param>
     /// <returns></returns>
     internal bool AddLocal(object Object)
     {
@@ -113,7 +114,7 @@ namespace NetworkManager
     }
     /// <summary>
     /// Insert the object in the local buffer to be synchronized
-    /// XmlObject is a new element inserted by an external user
+    /// xmlObject is a new element inserted by an external user
     /// </summary>
     /// <param name="xmlObject">Serialized object im format xml</param>
     /// <returns></returns>
@@ -121,34 +122,33 @@ namespace NetworkManager
     {
       if (string.IsNullOrEmpty(xmlObject))
         return false;
-      else
+      //long Timestamp = Network.Now.Ticks;
+      //var Element = new Element() { Timestamp = Timestamp, XmlObject = XmlObject };
+      //At level 0 the timestamp will be assigned before transmission to the node in order to reduce the difference with the timestamp on the node
+      var element = new Element() { XmlObject = xmlObject };
+      lock (Buffer)
       {
-        //long Timestamp = Network.Now.Ticks;
-        //var Element = new Element() { Timestamp = Timestamp, XmlObject = XmlObject };
-        //At level 0 the timestamp will be assigned before transmission to the node in order to reduce the difference with the timestamp on the node
-        var element = new Element() { XmlObject = xmlObject };
-        lock (Buffer)
-        {
-          var elementBuffer = new ElementBuffer(element);
-          elementBuffer.Levels.Add(1);
-          Buffer.Add(elementBuffer);
-          SortBuffer();
-        }
-        _spooler.DataDelivery();
-        return true;
+        var elementBuffer = new ElementBuffer(element);
+        elementBuffer.Levels.Add(1);
+        Buffer.Add(elementBuffer);
+        SortBuffer();
       }
+      _spooler.DataDelivery();
+      return true;
     }
 
     /// <summary>
     /// In this waiting list all the objects awaiting the timestamp signature are inserted by all the nodes assigned to the first level distribution
     /// </summary>
     private readonly List<ObjToNode> _standByList = new List<ObjToNode>();
+
     /// <summary>
     /// Insert the objects in the local buffer to be synchronized
     /// The elements come from other nodes
     /// </summary>
     /// <param name="elements">Elements come from other nodes</param>
-    internal ObjToNode.TimestampVector AddLocalFromNode(List<ObjToNode> elements, Node fromNode)
+    /// <param name="fromNode">From which node comes the element</param>
+    internal ObjToNode.TimestampVector AddLocalFromNode(IEnumerable<ObjToNode> elements, Node fromNode)
     {
       ObjToNode.TimestampVector result = null;
       lock (Buffer)
@@ -161,36 +161,41 @@ namespace NetworkManager
           UpdateStats(timePassedFromInsertion);
           if ((timePassedFromInsertion) <= _network.MappingNetwork.NetworkSyncTimeSpan)
           {
-            var level = objToNode.Level + 1;
-            var elementBuffer = Buffer.Find((x) => x.Element.Timestamp == objToNode.Timestamp && x.Element.XmlObject == objToNode.XmlObject);
-            if (elementBuffer == null)
+            if (objToNode.Level == 1)
             {
               UpdateStats(timePassedFromInsertion, true);
-              if (objToNode.Level == 1)
+              // This is an object that is just inserted, so you must certify the timestamp and send the certificate to the node that took delivery of the object.
+              // The object must then be put on standby until the node sends all the certificates for the timestamp.
+              if (objToNode.CheckNodeThatStartedDistributingTheObject(fromNode))
               {
-                // This is an object that is just inserted, so you must certify the timestamp and send the certificate to the node that took delivery of the object.
-                // The object must then be put on standby until the node sends all the certificates for the timestamp.
-                if (objToNode.CheckNodeThatStartedDistributingTheObject(fromNode))
-                {
-                  var signature = objToNode.CreateTheSignatureForTheTimestamp(_network.MyNode, _network.Now);
-                  _standByList.Add(objToNode);
-                  if (result == null)
-                    result = new ObjToNode.TimestampVector();
-                  result.SignedTimestamp.Add(objToNode.ShortHash, signature);
-                }
+                var signature = objToNode.CreateTheSignatureForTheTimestamp(_network.MyNode, _network.Now);
+                _standByList.Add(objToNode);
+                if (result == null) result = new ObjToNode.TimestampVector();
+                result.SignedTimestamp.Add(objToNode.ShortHash, signature);
               }
               else
               {
+                Utility.Log("security", "Check failure fromNode " + fromNode.Ip);
+                System.Diagnostics.Debugger.Break();
+              }
+            }
+            else
+            {
+              var level = objToNode.Level + 1;
+              var elementBuffer = Buffer.Find(x => x.Element.Timestamp == objToNode.Timestamp && x.Element.XmlObject == objToNode.XmlObject);
+              if (elementBuffer == null)
+              {
+                UpdateStats(timePassedFromInsertion, true);
                 elementBuffer = new ElementBuffer(objToNode.GetElement);
                 Buffer.Add(elementBuffer);
               }
+              lock (elementBuffer.Levels)
+                if (elementBuffer.Levels.Contains(level))
+                  elementBuffer.Levels.Add(level);
+              lock (elementBuffer.SendedNode)
+                elementBuffer.SendedNode.Add(fromNode);
+              elementBuffer.Received++;
             }
-            lock (elementBuffer.Levels)
-              if (!elementBuffer.Levels.Contains(level))
-                elementBuffer.Levels.Add(level);
-            lock (elementBuffer.SendedNode)
-              elementBuffer.SendedNode.Add(fromNode);
-            elementBuffer.Received++;
           }
           else
           {
@@ -199,7 +204,6 @@ namespace NetworkManager
             _stats12H.ElementsArrivedOutOfTime++;
           }
         }
-
         if (count == Buffer.Count) return result;
         SortBuffer();
         _spooler.DataDelivery();
@@ -238,7 +242,6 @@ namespace NetworkManager
       Stats24H.AddValue(value, firstAdd);
       _stats12H.AddValue(value, firstAdd);
     }
-    private readonly System.Timers.Timer _newStats;
     private void NewStatsElapsed()
     {
       Stats24H = _stats12H;

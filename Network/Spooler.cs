@@ -1,8 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Text;
-using static NetworkManager.BufferManager;
-using static NetworkManager.Network;
+using System.Timers;
 
 namespace NetworkManager
 {
@@ -16,8 +14,8 @@ namespace NetworkManager
       _network = network;
       _bufferManager = network.BufferManager;
       _mappingNetwork = network.MappingNetwork;
-      _spoolerTimer = new System.Timers.Timer(_pauseBetweenTransmissionOnTheNode) { AutoReset = true, Enabled = true };
-      _spoolerTimer.Elapsed += (sender, e) => DataDelivery();
+      var spoolerTimer = new Timer(_pauseBetweenTransmissionOnTheNode) { AutoReset = true, Enabled = true };
+      spoolerTimer.Elapsed += (sender, e) => DataDelivery();
     }
     private readonly Network _network;
     private readonly BufferManager _bufferManager;
@@ -27,32 +25,34 @@ namespace NetworkManager
     /// Memorize when the last communication was made at a certain level
     /// </summary>
     private readonly Dictionary<int, DateTime> _lastTransmission = new Dictionary<int, DateTime>();
-    private readonly System.Timers.Timer _spoolerTimer;
+
     internal void DataDelivery()
     {
       List<Node> level0Connections = null;//The transmissions at this level will receive the signature of the timestamp from the node that receives them, these signatures once received all must be sent to every single node of this level
       var dataToNode = new Dictionary<Node, List<ObjToNode>>();
-      var levels = new List<int>();
-      levels.Sort();
+      var toLevels = new List<int>();
+      toLevels.Sort();
       lock (_network.BufferManager.Buffer)
-        foreach (var data in _network.BufferManager.Buffer)
-        {
-          levels.AddRange(data.Levels.FindAll(x => !levels.Contains(x)));
-        }
-      foreach (var level in levels)
+        _network.BufferManager.Buffer.ForEach(element => toLevels.AddRange(element.Levels.FindAll(x => !toLevels.Contains(x))));
+      foreach (var toLevel in toLevels)
       {
         var msFromLastTransmissionAtThisLevel = int.MaxValue;
         lock (_lastTransmission)
-          if (_lastTransmission.TryGetValue(level, out var trasmissionTime))
-            msFromLastTransmissionAtThisLevel = (int)(DateTime.UtcNow - trasmissionTime).TotalMilliseconds;
+          if (_lastTransmission.TryGetValue(toLevel, out var transmissionTime))
+            msFromLastTransmissionAtThisLevel = (int)(DateTime.UtcNow - transmissionTime).TotalMilliseconds;
         if (msFromLastTransmissionAtThisLevel <= _pauseBetweenTransmissionOnTheNode) continue;
-        var connections = _network.MappingNetwork.GetConnections(level);
-        if (level == 0)
+        var connections = _network.MappingNetwork.GetConnections(toLevel); // ok, level is base 1
+        if (toLevel == 1) //I'm at level 0 and broadcast at level 1
           level0Connections = connections;
         lock (_network.BufferManager.Buffer)
           foreach (var elementBuffer in _network.BufferManager.Buffer)
-            if (elementBuffer.Levels.Contains(level))
+            if (elementBuffer.Levels.Contains(toLevel))
             {
+              var elementToNode = new ObjToNode(elementBuffer.Element) { Level = toLevel };
+              if (toLevel == 1 && elementToNode.Timestamp == 0) //I'm at level 0 and broadcast at level 1      
+                // We assign the timestamp and sign it
+                // The nodes of level 1 that will receive this element, will verify the timestamp and if congruous they sign it and return the signature in response to the forwarding.
+                elementToNode.AddFirstTimestamp(_network.MyNode, _network.Now.Ticks);
               foreach (var node in connections)
                 if (!elementBuffer.SendedNode.Contains(node))
                 {
@@ -61,28 +61,18 @@ namespace NetworkManager
                     toSendToNode = new List<ObjToNode>();
                     dataToNode.Add(node, toSendToNode);
                   }
-                  var elementToNode = new ObjToNode(elementBuffer.Element) { Level = level };
-                  if (level == 0)
-                  {
-                    // We assign the timestamp and sign it
-                    // The nodes of level 1 that will receive this element, will verify the timestamp and if congruous they sign it and return the signature in response to the forwarding.
-                    elementToNode.AddFirstTimestamp(_network.MyNode, _network.Now.Ticks);
-                  }
                   toSendToNode.Add(elementToNode);
                   lock (elementBuffer.SendedNode)
                     elementBuffer.SendedNode.Add(node);
                   lock (_lastTransmission)
                   {
-                    _lastTransmission.Remove(level);
-                    _lastTransmission.Add(level, DateTime.UtcNow);
+                    _lastTransmission.Remove(toLevel);
+                    _lastTransmission.Add(toLevel, DateTime.UtcNow);
                   }
                 }
             }
       }
-      var responseMonitorForLevel0 = new Protocol.ResponseMonitor
-      {
-        Level0Connections = level0Connections
-      };
+      var responseMonitorForLevel0 = new Protocol.ResponseMonitor { Level0Connections = level0Connections };
       foreach (var toSend in dataToNode)
       {
         if (level0Connections != null && level0Connections.Contains(toSend.Key))
