@@ -14,8 +14,7 @@ namespace NetworkManager
     public string MachineName => _base.MachineName;
     public string PublicKey => _base.PublicKey;
     public uint Ip => _base.Ip;
-    public int Connections => _connections;
-    private int _connections;
+    public int Connections { get; private set; }
     public StandardAnswer ConnectionStatus
     {
       get => _connectionStatus;
@@ -26,7 +25,7 @@ namespace NetworkManager
       }
     }
     public event EventHandler<StandardAnswer> OnConnectionStatusChanged;
-    internal void RaiseEventOnNodeListChanged(int count) { _connections = count; OnNodeListChanged?.Invoke(EventArgs.Empty, count); }
+    internal void RaiseEventOnNodeListChanged(int count) { Connections = count; OnNodeListChanged?.Invoke(EventArgs.Empty, count); }
     public event EventHandler<int> OnNodeListChanged;
   }
 }

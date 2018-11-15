@@ -39,7 +39,7 @@ namespace NetworkManager
     /// The timestamp of when the node has notified its presence.
     /// Since the node is not put online immediately, this parameter is used to communicate to the other nodes, the nodes of the network in a list with nodes that will be imminent online but still waiting.
     /// </summary>
-    public long? timestamp = null;
+    public long Timestamp;
     public uint Ip;
     internal bool CheckIp()
     {
@@ -55,7 +55,7 @@ namespace NetworkManager
         else
         {
           var ips = System.Net.Dns.GetHostAddresses(new Uri(Address).Host);
-          return BitConverter.ToUInt32(ips[ips.Length-1].GetAddressBytes(), 0);
+          return Converter.BytesToUint(ips[ips.Length - 1].GetAddressBytes());
         }
       }
       catch (Exception ex)
@@ -69,18 +69,23 @@ namespace NetworkManager
 
   public class NodeInitializer
   {
-    public NodeInitializer() { }
-    /// <summary>
-    /// Initialize the node to run in the virtual machine. Parameter used to make network tests by developers.
-    /// </summary>
-    /// <param name="virtualDevice"></param>
-    public NodeInitializer(VirtualDevice virtualDevice) { VirtualDevice = virtualDevice; Address = virtualDevice.Address; }
-    public string Address;
+    public NodeInitializer(string privateKey, string address)
+    {
+      PrivateKey = privateKey;
+      Address= address ;
+    }
+    public NodeInitializer(string privateKey, bool isVirtual)
+    {
+      PrivateKey = privateKey;
+      if (!isVirtual) return;
+      VirtualDevice = new VirtualDevice(); Address = VirtualDevice.Address;
+    }
+    public readonly string Address;
     public string PrivateKey;
     /// <summary>
     /// Optional parameter used to create a virtual machine for testing. The virtual machine helps the developer to create a simulated dummy network in the machine used for development. It is thus possible to create multiple nodes by simulating a p2p network. The list of already instanced devices is obtained through Network.Devices
     /// </summary>
-    public VirtualDevice VirtualDevice;
+    public readonly VirtualDevice VirtualDevice;
   }
 
 }

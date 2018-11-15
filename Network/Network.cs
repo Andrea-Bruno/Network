@@ -12,12 +12,12 @@ namespace NetworkManager
     public delegate void SyncData(string xmlObject, long timestamp);
 
     /// <summary>
-    ///   The buffer is a mechanism that allows you to distribute objects on the network by assigning a timestamp.
-    ///   The objects inserted in the buffer will exit from it on all the nodes following the chronological order of input(they
+    ///   The pipeline is a mechanism that allows you to distribute objects on the network by assigning a timestamp.
+    ///   The objects inserted in the pipeline will exit from it on all the nodes following the chronological order of input(they
     ///   come out sorted by timestamp).
-    ///   The data output from the buffer must be managed by actions that are programmed when the network is initialized.
+    ///   The data output from the pipeline must be managed by actions that are programmed when the network is initialized.
     /// </summary>
-    internal readonly BufferManager BufferManager;
+    internal readonly PipelineManager PipelineManager;
 
     /// <summary>
     ///   It creates communication mechanisms that can be used by a protocol to communicate between nodes via the Internet
@@ -64,7 +64,7 @@ namespace NetworkManager
       Networks.Add(this);
       Communication = new Communication(this);
       Protocol = new Protocol(this);
-      BufferManager = new BufferManager(this);
+      PipelineManager = new PipelineManager(this);
       MappingNetwork = new MappingNetwork(this);
       var entry = new List<Node>(entryPoints as Node[] ?? entryPoints.ToArray());
       NodeList = new NodeList(this);
@@ -107,7 +107,7 @@ namespace NetworkManager
         var networkLatency = 0;
         var stats1 = Protocol.GetStats(GetRandomNode());
         var stats2 = Protocol.GetStats(GetRandomNode());
-        networkLatency = Math.Max(stats1?.NetworkLatency ?? 0, stats2?.NetworkLatency ?? 0);
+        networkLatency = Math.Max(stats1?.NetworkLatency ?? 0, stats2?.NetworkLatency ?? 0);//***
         MappingNetwork.SetNetworkSyncTimeSpan(networkLatency);
       }
       MappingNetwork.SetNodeNetwork();
@@ -195,7 +195,8 @@ namespace NetworkManager
       var tryNode = 0;
       do
       {
-        var node = GetRandomNode();
+	      tryNode++;
+				var node = GetRandomNode();
         var count = 0;
         do
         {
@@ -208,17 +209,17 @@ namespace NetworkManager
     }
 
     /// <summary>
-    ///   Send an object to the network to be inserted in the shared buffer
+    ///   Send an object to the network to be inserted in the shared pipeline
     /// </summary>
     /// <param name="Object">Object to send</param>
     /// <returns></returns>
-    public StandardAnswer AddToSharedBuffer(object Object) => Protocol.AddToSharedBuffer(GetRandomNode(), Object);
+    public StandardAnswer AddToSharedPipeline(object Object) => Protocol.AddToSharedPipeline(GetRandomNode(), Object);
 
     /// <summary>
-    ///   Add a action used to local sync the objects coming from the buffer
+    ///   Add a action used to local sync the objects coming from the pipeline
     /// </summary>
     /// <param name="action">Action to execute for every object</param>
     /// <param name="forObjectName">Indicates what kind of objects will be treated by this action</param>
-    public bool AddSyncDataFromBufferAction(SyncData action, string forObjectName) => BufferManager.AddSyncDataAction(action, forObjectName);
+    public bool AddSyncDataFromPipelineAction(SyncData action, string forObjectName) => PipelineManager.AddSyncDataAction(action, forObjectName);
   }
 }

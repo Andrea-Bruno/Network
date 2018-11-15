@@ -17,8 +17,8 @@ namespace NetworkManager
     {
       lock (this)
       {
-        if (node.timestamp != null)
-          Add(node, (long)node.timestamp);
+        if (node.Timestamp != 0)
+          Add(node, node.Timestamp);
         else
           base.Add(node);
         Changed();
@@ -29,8 +29,8 @@ namespace NetworkManager
       lock (this)
       {
         foreach (var node in nodes)
-          if (node.timestamp != null)
-            Add(node, (long)node.timestamp);
+          if (node.Timestamp != 0)
+            Add(node, node.Timestamp);
           else
             base.Add(node);
         Changed();
@@ -89,7 +89,7 @@ namespace NetworkManager
       {
         lock (_comingSoon)
           _comingSoon.Remove(_comingSoon.Find(x => x.Ip == nodeIp));
-        var node = base.Find(x => x.Ip == nodeIp);
+        var node = Find(x => x.Ip == nodeIp);
         if (node != null)
         {
           lock (RecentOfflineNodes)
@@ -125,7 +125,7 @@ namespace NetworkManager
     internal void Add(Node node, long timestamp)
     {
       //the node will be online starting from timestamp + DeltaTimeMs;
-      node.timestamp = timestamp;
+      node.Timestamp = timestamp;
       lock (_comingSoon) _comingSoon.Add(node);
       var enabledFrom = timestamp + TimeSpan.FromMilliseconds(DeltaTimeMs).Ticks;
       var remainingTime = enabledFrom - _network.Now.Ticks;
@@ -136,7 +136,7 @@ namespace NetworkManager
         lock (_comingSoon)
         {
           if (!_comingSoon.Contains(node)) return;
-          node.timestamp = null;
+          node.Timestamp = 0;
           Add(node);
           _comingSoon.Remove(node);
         }

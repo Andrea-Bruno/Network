@@ -12,23 +12,13 @@ namespace NetworkManager
     }
     public static string GetObjectName(string xmlObject)
     {
-      if (!string.IsNullOrEmpty(xmlObject))
-      {
-        var p1 = xmlObject.IndexOf('>');
-        if (p1 != -1)
-        {
-          var p2 = xmlObject.IndexOf('<', p1);
-          if (p2 != -1)
-          {
-            var p3 = xmlObject.IndexOf('>', p2);
-            if (p3 != -1)
-            {
-              return xmlObject.Substring(p2 + 1, p3 - p2 - 1);
-            }
-          }
-        }
-      }
-      return null;
+      if (string.IsNullOrEmpty(xmlObject)) return null;
+      var p1 = xmlObject.IndexOf('>');
+      if (p1 == -1) return null;
+      var p2 = xmlObject.IndexOf('<', p1);
+      if (p2 == -1) return null;
+      var p3 = xmlObject.IndexOf('>', p2);
+      return p3 != -1 ? xmlObject.Substring(p2 + 1, p3 - p2 - 1) : null;
     }
 
     public static IEnumerable<IEnumerable<T>> GetPermutations<T>(IEnumerable<T> list, int length)
@@ -43,6 +33,13 @@ namespace NetworkManager
     {
       System.Security.Cryptography.HashAlgorithm hashType = new System.Security.Cryptography.SHA256Managed();
       return hashType.ComputeHash(data);
+    }
+
+    public static string MinifyXml(string xml)
+    {
+      var result = "";
+      xml.Replace("\r", "").Split('\n').ToList().ForEach(x => result += x.TrimStart());
+      return result;
     }
   }
 

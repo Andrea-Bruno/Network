@@ -12,13 +12,14 @@ namespace NetworkManager
     public Spooler(Network network)
     {
       _network = network;
-      _bufferManager = network.BufferManager;
+      _pipelineManager = network.PipelineManager;
       _mappingNetwork = network.MappingNetwork;
-      var spoolerTimer = new Timer(_pauseBetweenTransmissionOnTheNode) { AutoReset = true, Enabled = true };
-      spoolerTimer.Elapsed += (sender, e) => DataDelivery();
+       SpoolerTimer = new Timer(_pauseBetweenTransmissionOnTheNode) { AutoReset = true};
+      SpoolerTimer.Elapsed += (sender, e) => DataDelivery();
     }
-    private readonly Network _network;
-    private readonly BufferManager _bufferManager;
+	  internal readonly Timer SpoolerTimer ;
+		private readonly Network _network;
+    private readonly PipelineManager _pipelineManager;
     private readonly MappingNetwork _mappingNetwork;
     private readonly int _pauseBetweenTransmissionOnTheNode = 2000;
     /// <summary>
@@ -31,9 +32,9 @@ namespace NetworkManager
       List<Node> level0Connections = null;//The transmissions at this level will receive the signature of the timestamp from the node that receives them, these signatures once received all must be sent to every single node of this level
       var dataToNode = new Dictionary<Node, List<ObjToNode>>();
       var toLevels = new List<int>();
-      toLevels.Sort();
-      lock (_network.BufferManager.Buffer)
-        _network.BufferManager.Buffer.ForEach(element => toLevels.AddRange(element.Levels.FindAll(x => !toLevels.Contains(x))));
+      lock (_network.PipelineManager.Pipeline)
+        _network.PipelineManager.Pipeline.ForEach(element => toLevels.AddRange(element.Levels.FindAll(x => !toLevels.Contains(x))));
+	    toLevels.Sort();
       foreach (var toLevel in toLevels)
       {
         var msFromLastTransmissionAtThisLevel = int.MaxValue;
@@ -44,17 +45,17 @@ namespace NetworkManager
         var connections = _network.MappingNetwork.GetConnections(toLevel); // ok, level is base 1
         if (toLevel == 1) //I'm at level 0 and broadcast at level 1
           level0Connections = connections;
-        lock (_network.BufferManager.Buffer)
-          foreach (var elementBuffer in _network.BufferManager.Buffer)
-            if (elementBuffer.Levels.Contains(toLevel))
+        lock (_network.PipelineManager.Pipeline)
+          foreach (var elementPipeline in _network.PipelineManager.Pipeline)
+            if (elementPipeline.Levels.Contains(toLevel))
             {
-              var elementToNode = new ObjToNode(elementBuffer.Element) { Level = toLevel };
+              var elementToNode = new ObjToNode(elementPipeline.Element) { Level = toLevel };
               if (toLevel == 1 && elementToNode.Timestamp == 0) //I'm at level 0 and broadcast at level 1      
                 // We assign the timestamp and sign it
                 // The nodes of level 1 that will receive this element, will verify the timestamp and if congruous they sign it and return the signature in response to the forwarding.
                 elementToNode.AddFirstTimestamp(_network.MyNode, _network.Now.Ticks);
               foreach (var node in connections)
-                if (!elementBuffer.SendedNode.Contains(node))
+                if (!elementPipeline.SendedNode.Contains(node))
                 {
                   if (!dataToNode.TryGetValue(node, out var toSendToNode))
                   {
@@ -62,8 +63,8 @@ namespace NetworkManager
                     dataToNode.Add(node, toSendToNode);
                   }
                   toSendToNode.Add(elementToNode);
-                  lock (elementBuffer.SendedNode)
-                    elementBuffer.SendedNode.Add(node);
+                  lock (elementPipeline.SendedNode)
+                    elementPipeline.SendedNode.Add(node);
                   lock (_lastTransmission)
                   {
                     _lastTransmission.Remove(toLevel);

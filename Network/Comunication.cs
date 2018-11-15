@@ -73,29 +73,24 @@ namespace NetworkManager
       return _masterServer == "" ? null : _masterServer.TrimEnd('/');
     }
 
-    private BaseWebReader ExecuteServerRequest(bool async, string webAddress = null, string request = null,
-      object obj = null, NameValueCollection form = null, OnReceivedObject executeOnReceivedObject = null,
+    private BaseWebReader ExecuteServerRequest(bool async, string webAddress = null, string request = null, object obj = null, NameValueCollection form = null, OnReceivedObject executeOnReceivedObject = null,
       int secWaitAnswer = 0, Action executeIfNoAnswer = null, int secTimeOut = 0, string toUser = null,
       bool cancelAllMyRequest = false, bool removeObjectsToMe = false, bool removeMyObjects = false)
     {
       if (webAddress == null)
         webAddress = UrlServer();
       webAddress = webAddress.TrimEnd('/');
-      webAddress += "?network=" + Uri.EscapeDataString(_network.NetworkName) + "&app=" + Uri.EscapeDataString(_appName) +
-                    "&fromuser=" + Uri.EscapeDataString(Environment.MachineName) + "&secwaitanswer=" + secWaitAnswer;
+      webAddress += "/?network=" + Uri.EscapeDataString(_network.NetworkName) + "&app=" + Uri.EscapeDataString(_appName) + "&fromUser=" + Uri.EscapeDataString(Environment.MachineName) + "&secWaitAnswer=" + secWaitAnswer;
       if (cancelAllMyRequest)
-        webAddress += "&cancelrequest=true";
+        webAddress += "&cancelRequest=true";
       if (removeObjectsToMe)
-      {
-        webAddress += "&removeobjects=true";
-      }
-
+        webAddress += "&removeObjects=true";
       if (removeMyObjects)
-        webAddress += "&removemyobjects=true";
+        webAddress += "&removeMyObjects=true";
       if (string.IsNullOrEmpty(toUser))
         toUser = _masterServerMachineName + ".";
       if (!string.IsNullOrEmpty(toUser))
-        webAddress += "&touser=" + toUser;
+        webAddress += "&toUser=" + toUser;
       if (!string.IsNullOrEmpty(request))
         webAddress += "&request=" + request;
 
@@ -109,11 +104,11 @@ namespace NetworkManager
             executeOnReceivedObject.Invoke(objectVector.FromUser, objectVector.ObjectName, objectVector.XmlObject);
         };
       else
-        webAddress += "&nogetobject=true";
+        webAddress += "&noGetObject=true";
 
       if (obj != null)
       {
-        webAddress += "&post=" + obj.GetType().Name + "&sectimeout=" + secTimeOut;
+        webAddress += "&post=" + obj.GetType().Name + "&secTimeout=" + secTimeOut;
         var str = new StringWriter();
         var xml = new XmlSerializer(obj.GetType());
         var xmlns = new XmlSerializerNamespaces();
@@ -122,46 +117,38 @@ namespace NetworkManager
         var postData = str.ToString();
         if (form == null)
           form = new NameValueCollection();
-        var strCod = Converter.StringToBase64(postData);
+        var strCod = HttpUtility.UrlEncode((Utility.MinifyXml(postData)));
         form.Add("object", strCod);
       }
-
-      var virtualDevice = Device.FindDeviceByAddress(webAddress);
-      return virtualDevice != null
-        ? VirtualReadWeb(async, Converter.UintToIp(_network.VirtualDevice.Ip), webAddress, parser, null, form,
-          secWaitAnswer, executeIfNoAnswer, virtualDevice)
-        : (BaseWebReader)ReadWeb(async, webAddress, parser, null, form, secWaitAnswer, executeIfNoAnswer);
+      if (webAddress.StartsWith("vd://"))
+        return VirtualReadWeb(async, _network.VirtualDevice, webAddress, parser, null, form, secWaitAnswer, executeIfNoAnswer);
+      return ReadWeb(async, webAddress, parser, null, form, secWaitAnswer, executeIfNoAnswer);
+      //var virtualDevice = Device.FindDeviceByAddress(webAddress);
+      //return virtualDevice != null
+      //  ? VirtualReadWeb(async, Converter.UintToIp(_network.VirtualDevice.Ip), webAddress, parser, null, form, secWaitAnswer, executeIfNoAnswer, virtualDevice) : (BaseWebReader)ReadWeb(async, webAddress, parser, null, form, secWaitAnswer, executeIfNoAnswer);
     }
 
-    private static VirtualWebReader VirtualReadWeb(bool async, string myIp, string url, Action<string> parser,
-      Action elapse, NameValueCollection form = null, int secTimeout = 0, Action executeAtTimeout = null,
-      VirtualDevice sendRequestTo = null)
+    private static VirtualWebReader VirtualReadWeb(bool async, VirtualDevice client, string url, Action<string> parser, Action elapse, NameValueCollection form = null, int secTimeout = 0, Action executeAtTimeout = null)
     {
-      return new VirtualWebReader(async, myIp, url, parser, elapse, form, secTimeout, executeAtTimeout, sendRequestTo);
+      return new VirtualWebReader(async, client, url, parser, elapse, form, secTimeout, executeAtTimeout);
     }
 
-    private static WebReader ReadWeb(bool async, string url, Action<string> parser, Action elapse,
-      NameValueCollection form = null, int secTimeout = 0, Action executeAtTimeout = null)
+    private static WebReader ReadWeb(bool async, string url, Action<string> parser, Action elapse, NameValueCollection form = null, int secTimeout = 0, Action executeAtTimeout = null)
     {
       return new WebReader(async, url, parser, elapse, form, secTimeout, executeAtTimeout);
     }
 
-    public class VirtualWebReader : BaseWebReader
+    private class VirtualWebReader : BaseWebReader
     {
       private VirtualWebClient _virtualWebClient;
-      private readonly VirtualDevice _virtualDevice;
-
-      public VirtualWebReader(bool async, string myIp, string url, Action<string> parser, Action elapse,
-        NameValueCollection form = null, int secTimeout = 0, Action executeAtTimeout = null,
-        VirtualDevice sendRequestTo = null) : base(async, url, parser, elapse, form, secTimeout, executeAtTimeout)
+      public VirtualWebReader(bool async, VirtualDevice client, string url, Action<string> parser, Action elapse, NameValueCollection form = null, int secTimeout = 0, Action executeAtTimeout = null) : base(parser, elapse, form, secTimeout, executeAtTimeout)
       {
-        _virtualDevice = sendRequestTo ?? Device.FindDeviceByAddress(url);
         VirtualWebClient = new VirtualWebClient();
         Cancel = () => { VirtualWebClient.CancelAsync(); };
-        UploadAsync = () => { VirtualWebClient.UploadValuesAsync(url, "POST", form, _virtualDevice, myIp); };
+        UploadAsync = () => { VirtualWebClient.UploadValuesAsync(url, "POST", form, client); };
         Upload = () =>
         {
-          Html = VirtualWebClient.UploadValues(url, "POST", form, _virtualDevice, myIp);
+          Html = VirtualWebClient.UploadValues(url, "POST", form, client);
           return Html;
         };
         Start(url, async);
@@ -197,8 +184,7 @@ namespace NetworkManager
     {
       private WebClient _webClient;
 
-      public WebReader(bool async, string url, Action<string> parser, Action elapse, NameValueCollection form = null,
-        int secTimeout = 0, Action executeAtTimeout = null) : base(async, url, parser, elapse, form, secTimeout,
+      public WebReader(bool async, string url, Action<string> parser, Action elapse, NameValueCollection form, int secTimeout = 0, Action executeAtTimeout = null) : base(parser, elapse, form, secTimeout,
         executeAtTimeout)
       {
         WebClient = new WebClient();
@@ -206,8 +192,8 @@ namespace NetworkManager
         UploadAsync = () => { WebClient.UploadValuesAsync(new Uri(url), "POST", form); };
         Upload = () =>
         {
-          var responsebytes = WebClient.UploadValues(url, "POST", form);
-          Html = new UTF8Encoding().GetString(responsebytes);
+          var responseBytes = WebClient.UploadValues(url, "POST", form);
+          Html = new UTF8Encoding().GetString(responseBytes);
           return Html;
         };
         Start(url, async);
@@ -250,7 +236,7 @@ namespace NetworkManager
       protected Func<string> Upload;
       protected Action UploadAsync;
 
-      protected BaseWebReader(bool async, string url, Action<string> parser, Action elapse, NameValueCollection dictionary = null, int secTimeout = 0, Action executeAtTimeout = null)
+      protected BaseWebReader(Action<string> parser, Action elapse, NameValueCollection dictionary = null, int secTimeout = 0, Action executeAtTimeout = null)
       {
         _execute = parser;
         _elapse = elapse;
@@ -411,8 +397,7 @@ namespace NetworkManager
       public bool Canceled;
       private int _currentWebRequest;
       public string Error;
-      public NameValueCollection ResponseHeaders;
-
+      public NameValueCollection ResponseHeaders { get; private set; }
       public string Result
       {
         get => _result;
@@ -422,34 +407,28 @@ namespace NetworkManager
           OpenReadCompleted?.Invoke(this, null);
         }
       }
-
       public void CancelAsync()
       {
       }
-
-      public void UploadValuesAsync(string address, string method, NameValueCollection form,
-        VirtualDevice virtualDevice, string myIp)
+      public void UploadValuesAsync(string address, string method, NameValueCollection form, VirtualDevice client)
       {
-        new Thread(() => { Result = UploadValues(address, method, form, virtualDevice, myIp); }).Start();
+        new Thread(() => { Result = UploadValues(address, method, form, client); }).Start();
       }
 
-      public string UploadValues(string address, string method, NameValueCollection form, VirtualDevice virtualDevice,
-        string myIp)
+      public string UploadValues(string address, string method, NameValueCollection form, VirtualDevice client)
       {
+        //note: method is auto detected about this is not used
         Error = null;
         Canceled = false;
-        if (!virtualDevice.IsOnline) return Result;
         var time = DateTime.Now.ToUniversalTime();
         _currentWebRequest += 1;
-        var myUri = new Uri(address);
-        var queryString = HttpUtility.ParseQueryString(myUri.Query);
-        var response =
-          virtualDevice.Device.WebServer(
-            new Device.BaseDevice.WebRequest(queryString, form ?? new NameValueCollection(), myIp));
+        var request = new WebRequest(address, form ?? new NameValueCollection(), method, Converter.UintToIp(client.Ip));
+        var response = VirtualDevice.HttpRequest(request);
         Result = response?.Text;
-        var mb = Result == null ? 0 : Result.Length / 1048576f;
+        ResponseHeaders = response?.Headers;
+        var mb = response?.Text?.Length / 1048576f ?? 0;
         // It is empirical but excellent for simulating the network speed as set by the Virtual Device
-        var pauseMs = (int)(mb / virtualDevice.NetSpeed * 1000 * _currentWebRequest);
+        var pauseMs = (int)(mb / client.NetSpeed * 1000 * _currentWebRequest);
         var msFromTime = (int)(DateTime.Now.ToUniversalTime() - time).TotalMilliseconds;
         pauseMs -= msFromTime;
         if (pauseMs > 0)
@@ -457,7 +436,6 @@ namespace NetworkManager
         _currentWebRequest -= 1;
         return Result;
       }
-
       public event EventHandler OpenReadCompleted;
     }
 
@@ -475,7 +453,7 @@ namespace NetworkManager
       {
         FromUser = fromUser;
         ObjectName = objectName;
-        XmlObject = xmlObject;
+        XmlObject = Utility.MinifyXml(xmlObject);
       }
 
       public ObjectVector(string fromUser, object obj)
@@ -488,7 +466,7 @@ namespace NetworkManager
         using (var textWriter = new StringWriter())
         {
           xmlSerializer.Serialize(textWriter, obj);
-          XmlObject = textWriter.ToString();
+          XmlObject = Utility.MinifyXml(textWriter.ToString());
         }
       }
     }
