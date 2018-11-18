@@ -80,8 +80,15 @@ namespace NetworkManager
       if (!isVirtual) return;
       VirtualDevice = new VirtualDevice(); Address = VirtualDevice.Address;
     }
-    public readonly string Address;
-    public string PrivateKey;
+	  public NodeInitializer(string privateKey, VirtualDevice virtualDevice = null)
+	  {
+		  PrivateKey = privateKey;
+		  if (virtualDevice == null) return;
+		  VirtualDevice = virtualDevice;
+		  Address = virtualDevice.Address;
+	  }
+		public readonly string Address;
+    public readonly string PrivateKey;
     /// <summary>
     /// Optional parameter used to create a virtual machine for testing. The virtual machine helps the developer to create a simulated dummy network in the machine used for development. It is thus possible to create multiple nodes by simulating a p2p network. The list of already instanced devices is obtained through NetworkConnection.Devices
     /// </summary>

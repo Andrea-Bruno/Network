@@ -80,7 +80,7 @@ namespace NetworkManager
       if (webAddress == null)
         webAddress = UrlServer();
       webAddress = webAddress.TrimEnd('/');
-      webAddress += "/?networkConnection=" + Uri.EscapeDataString(_networkConnection.NetworkName) + "&app=" + Uri.EscapeDataString(_appName) + "&fromUser=" + Uri.EscapeDataString(Environment.MachineName) + "&secWaitAnswer=" + secWaitAnswer;
+      webAddress += "/?network=" + Uri.EscapeDataString(_networkConnection.NetworkName) + "&app=" + Uri.EscapeDataString(_appName) + "&fromUser=" + Uri.EscapeDataString(Environment.MachineName) + "&secWaitAnswer=" + secWaitAnswer;
       if (cancelAllMyRequest)
         webAddress += "&cancelRequest=true";
       if (removeObjectsToMe)

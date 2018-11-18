@@ -78,6 +78,7 @@ namespace NetworkManager
 				ThisNode = new InfoNode(MyNode);
 				NodeList.Add(MyNode);
 			}
+			entry.ForEach(x => x.DetectIp());
 			NodeList.AddRange(entry);
 			NetworkName = networkName;
 
