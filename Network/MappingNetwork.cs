@@ -1,21 +1,20 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Text;
-using static NetworkManager.Network;
+using System.Diagnostics;
 
 namespace NetworkManager
 {
 	/// <summary>
-	/// Contains the logic that establishes a mapping of the network and its subdivision to increase its performance.
-	/// The network is divided at a logical level into many ring groups, with a recursive pyramidal structure
+	/// Contains the logic that establishes a mapping of the networkConnection and its subdivision to increase its performance.
+	/// The networkConnection is divided at a logical level into many ring groups, with a recursive pyramidal structure
 	/// </summary>
 	internal class MappingNetwork
 	{
-		public MappingNetwork(Network network)
+		public MappingNetwork(NetworkConnection networkConnection)
 		{
-			_network = network;
+			_networkConnection = networkConnection;
 		}
-		private readonly Network _network;
+		private readonly NetworkConnection _networkConnection;
 		private int _c;
 		private int _s;
 		private int SquareSide(int count)
@@ -69,11 +68,11 @@ namespace NetworkManager
 		}
 		internal void SetNodeNetwork()
 		{
-			//SquareSide = (int)Math.Ceiling(Math.Sqrt(Network.NodeList.Count));
-			GetXy(_network.MyNode, _network.NodeList, out _myX, out _myY);
-			CacheConnections = new Dictionary<int, List<Node>>();
+			//SquareSide = (int)Math.Ceiling(Math.Sqrt(NetworkConnection.NodeList.Count));
+			GetXy(_networkConnection.MyNode, _networkConnection.NodeList, out _myX, out _myY);
+			_cacheConnections = new Dictionary<int, List<Node>>();
 		}
-		private Dictionary<int, List<Node>> CacheConnections = new Dictionary<int, List<Node>>();
+		private Dictionary<int, List<Node>> _cacheConnections = new Dictionary<int, List<Node>>();
 		/// <summary>
 		/// All connections that have the node at a certain level
 		/// </summary>
@@ -81,25 +80,34 @@ namespace NetworkManager
 		/// <returns>The list of nodes connected to the level</returns>
 		internal List<Node> GetConnections(int level)
 		{
-			lock (CacheConnections)
+			lock (_cacheConnections)
 			{
-				if (CacheConnections.TryGetValue(level, out var result))
+				if (_cacheConnections.TryGetValue(level, out var result))
 					return result;
-				result = GetConnections(level, _network.MyNode, _network.NodeList);
-				CacheConnections.Add(level, result);
+				result = GetConnections(level, _networkConnection.MyNode, _networkConnection.NodeList);
+				_cacheConnections.Add(level, result);
 				return result;
 			}
 		}
+		/// <summary>
+		/// All connections that have the node at a certain level
+		/// </summary>
+		/// <param name="level">The level is base 1</param>
+		/// <param name="node">The node to find the connections at the pre-established level</param>
+		/// <param name="nodeList">The nodes that make up the entire network</param>
+		/// <returns></returns>
 		internal List<Node> GetConnections(int level, Node node, List<Node> nodeList)
 		{
-			// return GetConnections(Level, X, Y);
+#if DEBUG
+			if (level==0) Debugger.Break(); // level is base 1!
+#endif
 			var list = new List<Node>();
 			if (nodeList.Count == 0) return list;
 			var distance = SquareSide(nodeList.Count) / (int)Math.Pow(3, level);
 			if (distance < 1)
 				distance = 1;
 			int xNode, yNode;
-			if (node != _network.MyNode || nodeList != _network.NodeList)
+			if (node != _networkConnection.MyNode || nodeList != _networkConnection.NodeList)
 				GetXy(node, nodeList, out xNode, out yNode);
 			else
 			{

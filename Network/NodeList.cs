@@ -7,11 +7,11 @@ namespace NetworkManager
 {
   public class NodeList : List<Node>
   {
-    public NodeList(Network network)
+    public NodeList(NetworkConnection networkConnection)
     {
-      _network = network;
+      _networkConnection = networkConnection;
     }
-    private readonly Network _network;
+    private readonly NetworkConnection _networkConnection;
 
     public new void Add(Node node)
     {
@@ -37,11 +37,11 @@ namespace NetworkManager
       }
     }
     /// <summary>
-    /// Update the list of online nodes by querying the network.
+    /// Update the list of online nodes by querying the networkConnection.
     /// </summary>
     public void Update()
     {
-      if (_network.MyNode == null)
+      if (_networkConnection.MyNode == null)
         _update();
       else
       {
@@ -52,21 +52,21 @@ namespace NetworkManager
       }
     }
     /// <summary>
-    /// Update the list of online nodes by querying the network
+    /// Update the list of online nodes by querying the networkConnection
     /// </summary>
     private void _update()
     {
-      var connectionNode = _network.GetRandomNode();
-      var nodes = _network.Protocol.GetNetworkNodes(connectionNode);
-      if (_network.MyNode == null)
+      var connectionNode = _networkConnection.GetRandomNode();
+      var nodes = _networkConnection.Protocol.GetNetworkNodes(connectionNode);
+      if (_networkConnection.MyNode == null)
       {
         AddRange(nodes);
         return;
       }
-      nodes.RemoveAll(x => x.Address == _network.MyNode.Address || x.Ip == _network.MyNode.Ip);
+      nodes.RemoveAll(x => x.Address == _networkConnection.MyNode.Address || x.Ip == _networkConnection.MyNode.Ip);
       Clear();
       AddRange(nodes);
-      Add(_network.MyNode);
+      Add(_networkConnection.MyNode);
     }
 
     public new void Clear()
@@ -112,13 +112,13 @@ namespace NetworkManager
     private void Changed(bool removed = false)
     {
       if (!removed) Sort((x, y) => x.Ip.CompareTo(y.Ip));
-      //Network.NodeList = this.OrderBy(o => o.Ip).ToList();
-      _network.MappingNetwork.SetNodeNetwork();
-      _network.ThisNode.RaiseEventOnNodeListChanged(Count);
+      //NetworkConnection.NodeList = this.OrderBy(o => o.Ip).ToList();
+      _networkConnection.MappingNetwork.SetNodeNetwork();
+      _networkConnection.ThisNode.RaiseEventOnNodeListChanged(Count);
     }
     private const int DeltaTimeMs = 30000; //Add this node after these milliseconds from timestamp
     /// <summary>
-    ///   Add a new node to the network. Using this function, the new node will be added to all nodes simultaneously.
+    ///   Add a new node to the networkConnection. Using this function, the new node will be added to all nodes simultaneously.
     /// </summary>
     /// <param name="node">Node to add</param>
     /// <param name="timestamp">Timestamp of the notification</param>
@@ -128,7 +128,7 @@ namespace NetworkManager
       node.Timestamp = timestamp;
       lock (_comingSoon) _comingSoon.Add(node);
       var enabledFrom = timestamp + TimeSpan.FromMilliseconds(DeltaTimeMs).Ticks;
-      var remainingTime = enabledFrom - _network.Now.Ticks;
+      var remainingTime = enabledFrom - _networkConnection.Now.Ticks;
       var ms = (int)TimeSpan.FromTicks(remainingTime).TotalMilliseconds;
       var timer = new Timer(ms >= 1 ? ms : 1) { AutoReset = false };
       timer.Elapsed += (sender, e) =>

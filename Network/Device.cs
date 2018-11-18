@@ -50,7 +50,7 @@ namespace NetworkManager
 		}
 		private static readonly List<BaseDevice> BaseDevices = new List<BaseDevice>();
 		private readonly BaseDevice _bd;
-		internal List<Network> Networks => _bd.Networks;
+		internal List<NetworkConnection> Networks => _bd.Networks;
 		public string MachineName => _bd.MachineName;
 
 		/// <summary>
@@ -63,7 +63,7 @@ namespace NetworkManager
 		private static BaseDevice _realDevice;
 		internal class BaseDevice
 		{
-			public readonly List<Network> Networks = new List<Network>();
+			public readonly List<NetworkConnection> Networks = new List<NetworkConnection>();
 			public string MachineName
 			{
 				get
@@ -163,7 +163,7 @@ namespace NetworkManager
 									case StandardMessages.SendElementsToNode when Converter.XmlToObject(xmlObject, typeof(List<ObjToNode>), out var objElements):
 										{
 											var uintFromIp = Converter.IpToUint(fromIp);
-											Node fromNode= null;
+											Node fromNode = null;
 											for (var nTry = 0; nTry < 2; nTry++)
 											{
 												fromNode = network.NodeList.Find((x) => x.Ip == uintFromIp);
@@ -185,10 +185,11 @@ namespace NetworkManager
 										break;
 									case StandardMessages.SendTimestampSignatureToNode when Converter.XmlToObject(xmlObject, typeof(ObjToNode.TimestampVector), out var timestampVector):
 										{
+											//The node at level 1 receives the decentralized timestamp from node at level 0. At this point if everything is correct, the elements in stand by will be propagated on all the nodes.
 											var uintFromIp = Converter.IpToUint(fromIp);
 											var fromNode = network.NodeList.Find((x) => x.Ip == uintFromIp);
 											if (fromNode != null)
-												returnObject = network.PipelineManager.UnlockElementsInStandBy((ObjToNode.TimestampVector)timestampVector, fromNode) ? StandardAnswer.Ok : StandardAnswer.Error;
+												returnObject = network.PipelineManager.UnlockElementsInStandBy((ObjToNode.TimestampVector)timestampVector, uintFromIp) ? StandardAnswer.Ok : StandardAnswer.Error;
 											break;
 										}
 									case StandardMessages.SendTimestampSignatureToNode:

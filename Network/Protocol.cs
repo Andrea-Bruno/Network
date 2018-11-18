@@ -26,17 +26,35 @@ namespace NetworkManager
 			Declined,
 			IpError,
 			Unauthorized,
+			UnexpectedAnswer
+		}
+
+		private StandardAnswer Answer(string xmlResult)
+		{
+			if (string.IsNullOrEmpty(xmlResult)) return StandardAnswer.NoAnswer;
+			if (Utility.GetObjectName(xmlResult) != "StandardAnswer") return StandardAnswer.UnexpectedAnswer;
+			try
+			{
+				Converter.XmlToObject(xmlResult, typeof(StandardAnswer), out var returnObj);
+				var answer = (StandardAnswer)returnObj;
+				return answer;
+			}
+			catch (Exception e)
+			{
+				Console.WriteLine(e);
+				return StandardAnswer.Failure;
+			}
 		}
 
 		private const int DefaultSpeedLimit = 1000;//***
 		private readonly int _speedLimit = DefaultSpeedLimit;
-		private readonly Network _network;
+		private readonly NetworkConnection _networkConnection;
 		internal readonly Dictionary<string, GetObject> OnReceivingObjectsActions = new Dictionary<string, GetObject>();
 		internal readonly Dictionary<string, GetObject> OnRequestActions = new Dictionary<string, GetObject>();
 
-		internal Protocol(Network network)
+		internal Protocol(NetworkConnection networkConnection)
 		{
-			_network = network;
+			_networkConnection = networkConnection;
 		}
 
 		public bool AddOnReceivingObjectAction(string nameTypeObject, GetObject getObject)
@@ -74,12 +92,12 @@ namespace NetworkManager
 				//  ToNode = GetRandomNode();
 				if (toNode == null)
 					return "";
-				xmlResult = _network.Communication.GetObjectSync(toNode.Address, request, obj, toNode.MachineName + ".");
+				xmlResult = _networkConnection.Communication.GetObjectSync(toNode.Address, request, obj, toNode.MachineName + ".");
 			} while (string.IsNullOrEmpty(xmlResult) && Try <= 10);
 			if (Try <= 10) return xmlResult;
 			Debugger.Break();
-			_network.IsOnline = false;
-			_network.OnlineDetection.WaitForInternetConnection();
+			_networkConnection.IsOnline = false;
+			_networkConnection.OnlineDetection.WaitForInternetConnection();
 
 			return xmlResult;
 		}
@@ -101,39 +119,12 @@ namespace NetworkManager
 
 		internal StandardAnswer ImOffline(Node toNode, Node myNode)
 		{
-			var xmlResult = SendRequest(toNode, StandardMessages.ImOffline, myNode);
-			if (string.IsNullOrEmpty(xmlResult)) return StandardAnswer.Error;
-			try
-			{
-				Converter.XmlToObject(xmlResult, typeof(StandardAnswer), out var answer);
-				return (StandardAnswer)answer;
-			}
-			catch (Exception ex)
-			{
-				Debug.Print(ex.Message);
-				Debugger.Break();
-			}
-
-			return StandardAnswer.Error;
+			return Answer(SendRequest(toNode, StandardMessages.ImOffline, myNode));
 		}
 
 		internal StandardAnswer ImOnline(Node toNode, Node myNode)
 		{
-			var xmlResult = SendRequest(toNode, StandardMessages.ImOnline, myNode);
-			if (string.IsNullOrEmpty(xmlResult))
-				return StandardAnswer.NoAnswer;
-			try
-			{
-				Converter.XmlToObject(xmlResult, typeof(StandardAnswer), out var answer);
-				return (StandardAnswer)answer;
-			}
-			catch (Exception ex)
-			{
-				Debug.Print(ex.Message);
-				Debugger.Break();
-			}
-
-			return StandardAnswer.Error;
+			return Answer(SendRequest(toNode, StandardMessages.ImOnline, myNode));
 		}
 
 		internal Stats GetStats(Node fromNode)
@@ -153,14 +144,13 @@ namespace NetworkManager
 				Debug.Print(ex.Message);
 				Debugger.Break();
 			}
-
 			return stats;
 		}
 
 		internal bool DecentralizedSpeedTest(Node nodeToTesting, out List<SpeedTestResult> speedTestResults)
 		{
 			speedTestResults = new List<SpeedTestResult>();
-			var connections = _network.MappingNetwork.GetConnections(0);
+			var connections = _networkConnection.MappingNetwork.GetConnections(1);
 			var speedSigned = SpeedTestSigned(nodeToTesting);
 			speedTestResults.Add(speedSigned);
 			var speeds = new List<int> { speedSigned.Speed };
@@ -202,8 +192,8 @@ namespace NetworkManager
 
 		internal SpeedTestResult SpeedTestSigned(Node nodeToTesting)
 		{
-			var result = new SpeedTestResult { Speed = SpeedTest(nodeToTesting), NodeIp = _network.MyNode.Ip };
-			result.SignTheResult(_network.MyNode, nodeToTesting.Ip, _network.Now.Ticks);
+			var result = new SpeedTestResult { Speed = SpeedTest(nodeToTesting), NodeIp = _networkConnection.MyNode.Ip };
+			result.SignTheResult(_networkConnection.MyNode, nodeToTesting.Ip, _networkConnection.Now.Ticks);
 			return result;
 		}
 
@@ -230,21 +220,16 @@ namespace NetworkManager
 		internal bool NotificationNewNodeIsOnline(Node node, List<SpeedTestResult> speedTestResults)
 		{
 			var notification = new NodeOnlineNotification { Node = node, Signatures = speedTestResults };
-			return _network.PipelineManager.AddLocal(notification);
+			return _networkConnection.PipelineManager.AddLocal(notification);
 		}
 
 		internal StandardAnswer AddToSharedPipeline(Node toNode, object Object)
 		{
-			if (_network.ThisNode.ConnectionStatus != StandardAnswer.Ok)
-				return _network.ThisNode.ConnectionStatus;
+			if (_networkConnection.ThisNode.ConnectionStatus != StandardAnswer.Ok)
+				return _networkConnection.ThisNode.ConnectionStatus;
 			try
 			{
-				var xmlResult = SendRequest(toNode, StandardMessages.AddToPipeline, Object);
-				//var XmlResult = Communication.SendObjectSync(Object, Node.Address, null, Node.MachineName);
-				if (string.IsNullOrEmpty(xmlResult)) return StandardAnswer.NoAnswer;
-				Converter.XmlToObject(xmlResult, typeof(StandardAnswer), out var returnObj);
-				var answer = (StandardAnswer)returnObj;
-				return answer;
+				return Answer(SendRequest(toNode, StandardMessages.AddToPipeline, Object));
 			}
 			catch (Exception ex)
 			{
@@ -258,7 +243,7 @@ namespace NetworkManager
 		///   It transfers a list of elements to a node, if this is the node at level 0, it means that these elements have just
 		///   been taken into charge, it will then be distributed to all connections at level 0, collect all the signatures that
 		///   certify the timestamp, and send the signatures to the nodes connected to level 0.
-		///   This procedure is used to create a decentralized timestamp within the network.
+		///   This procedure is used to create a decentralized timestamp within the networkConnection.
 		/// </summary>
 		/// <param name="elements">Element to send to the node</param>
 		/// <param name="toNode">Node that will receive the elements</param>
@@ -271,40 +256,68 @@ namespace NetworkManager
 			new Thread(() =>
 			{
 				string xmlResult = null;
-							//Verify if the node is disconnected
-							if (!_network.NodeList.Contains(toNode)) return;
+				//Verify if the node is disconnected
+				if (!_networkConnection.NodeList.Contains(toNode)) return;
 				xmlResult = SendRequest(toNode, StandardMessages.SendElementsToNode, elements);
-				if (Utility.GetObjectName(xmlResult) == "TimestampVector")
+				var objectName = Utility.GetObjectName(xmlResult);
+				if (objectName == "TimestampVector")
+				{
+					var answer = Answer(xmlResult);
+					if (answer != StandardAnswer.Ok)
+					{
+						// Error occurred
+					}
+				}
+				if (responseMonitor == null) return;
+				if (objectName == "TimestampVector")
+				{
 					if (Converter.XmlToObject(xmlResult, typeof(ObjToNode.TimestampVector), out var objTimestampVector))
 					{
-						var timestampVector = (ObjToNode.TimestampVector)objTimestampVector;
+						var timestamps = (ObjToNode.TimestampVector)objTimestampVector;
 						foreach (var element in elements)
-							if (timestampVector.SignedTimestamp.TryGetValue(element.ShortHash(), out var signedTimestamp))
+							if (element.Level == 1 && timestamps.TryGetValue(element.ShortHash(), out var signedTimestamp))
+							{
 								element.TimestampSignature += signedTimestamp;
+								var l = Convert.FromBase64String(signedTimestamp).Length;
+							}
 					}
-				if (responseMonitor == null) return;
-				{
-					responseMonitor.ResponseCounter += 1;
-					if (responseMonitor.ResponseCounter != responseMonitor.Level0Connections.Count) return;
-								// All nodes connected to the zero level have signed the timestamp, now the signature of the timestamp of all the nodes must be sent to every single node.
-								// This operation is used to create a decentralized timestamp.
-								var timestampVector = new ObjToNode.TimestampVector();
-					foreach (var element in elements)
-						timestampVector.SignedTimestamp.Add(element.ShortHash(), element.TimestampSignature);
-					foreach (var node in responseMonitor.Level0Connections)
-						SendTimestampSignatureToNode(timestampVector, node);
 				}
+				else
+				{
+					var answer = Answer(xmlResult);
+					// Add the response management here!!!
+				}
+				responseMonitor.ResponseCounter += 1;
+				if (responseMonitor.ResponseCounter != responseMonitor.Level0Connections.Count) return;
+				// All nodes connected to the zero level have signed the timestamp, now the signature of the timestamp of all the nodes must be sent to every single node.
+				// This operation is used to create a decentralized timestamp.
+				var timestampVector = new ObjToNode.TimestampVector();
+				foreach (var element in elements)
+					timestampVector.Add(element.ShortHash(), element.TimestampSignature);
+				foreach (var node in responseMonitor.Level0Connections)
+					// The node at zero level (the entry point of the request), when it has kept the signature of the timestamp from all the connected nodes, communicates to each connected node all the collected signatures.
+					// This is a decentralized collective timestamp.
+					SendTimestampSignatureToNode(timestampVector, node);
+
 			}).Start();
 		}
 
+		/// <summary>
+		/// The node at zero level (the entry point of the request), when it has kept the signature of the timestamp from all the connected nodes, communicates to each connected node all the collected signatures.
+		/// This is a decentralized collective timestamp.
+		/// The connected node has previously received an "element", which is held in stand-by until it receives the certified timestamp.
+		/// This operation will unlock the stand-by if everything is regular
+		/// </summary>
+		/// <param name="timestampVector">The timestamp signed by all connected nodes</param>
+		/// <param name="toNode">The connected node to send this data to</param>
 		private void SendTimestampSignatureToNode(ObjToNode.TimestampVector timestampVector, Node toNode)
 		{
 			new Thread(() =>
 			{
-				string xmlResult = null;
-							//Verify if the node is disconnected
-							if (_network.NodeList.Contains(toNode))
-					xmlResult = SendRequest(toNode, StandardMessages.SendTimestampSignatureToNode, timestampVector);
+				//Verify if the node is disconnected
+				if (!_networkConnection.NodeList.Contains(toNode)) return;
+				StandardAnswer answer;
+				answer = Answer(SendRequest(toNode, StandardMessages.SendTimestampSignatureToNode, timestampVector));
 			}).Start();
 		}
 

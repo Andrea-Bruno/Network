@@ -23,11 +23,11 @@ namespace NetworkManager
     private readonly string _appName = Assembly.GetExecutingAssembly().FullName.Split(',')[0];
     private readonly string _masterServer;
     private readonly string _masterServerMachineName;
-    private readonly Network _network;
+    private readonly NetworkConnection _networkConnection;
 
-    public Communication(Network network, string masterServerMachineName = null, string masterServer = null)
+    public Communication(NetworkConnection networkConnection, string masterServerMachineName = null, string masterServer = null)
     {
-      _network = network;
+      _networkConnection = networkConnection;
       _masterServerMachineName = masterServerMachineName;
       _masterServer = masterServer;
     }
@@ -80,7 +80,7 @@ namespace NetworkManager
       if (webAddress == null)
         webAddress = UrlServer();
       webAddress = webAddress.TrimEnd('/');
-      webAddress += "/?network=" + Uri.EscapeDataString(_network.NetworkName) + "&app=" + Uri.EscapeDataString(_appName) + "&fromUser=" + Uri.EscapeDataString(Environment.MachineName) + "&secWaitAnswer=" + secWaitAnswer;
+      webAddress += "/?networkConnection=" + Uri.EscapeDataString(_networkConnection.NetworkName) + "&app=" + Uri.EscapeDataString(_appName) + "&fromUser=" + Uri.EscapeDataString(Environment.MachineName) + "&secWaitAnswer=" + secWaitAnswer;
       if (cancelAllMyRequest)
         webAddress += "&cancelRequest=true";
       if (removeObjectsToMe)
@@ -121,11 +121,11 @@ namespace NetworkManager
         form.Add("object", strCod);
       }
       if (webAddress.StartsWith("vd://"))
-        return VirtualReadWeb(async, _network.VirtualDevice, webAddress, parser, null, form, secWaitAnswer, executeIfNoAnswer);
+        return VirtualReadWeb(async, _networkConnection.VirtualDevice, webAddress, parser, null, form, secWaitAnswer, executeIfNoAnswer);
       return ReadWeb(async, webAddress, parser, null, form, secWaitAnswer, executeIfNoAnswer);
       //var virtualDevice = Device.FindDeviceByAddress(webAddress);
       //return virtualDevice != null
-      //  ? VirtualReadWeb(async, Converter.UintToIp(_network.VirtualDevice.Ip), webAddress, parser, null, form, secWaitAnswer, executeIfNoAnswer, virtualDevice) : (BaseWebReader)ReadWeb(async, webAddress, parser, null, form, secWaitAnswer, executeIfNoAnswer);
+      //  ? VirtualReadWeb(async, Converter.UintToIp(_networkConnection.VirtualDevice.Ip), webAddress, parser, null, form, secWaitAnswer, executeIfNoAnswer, virtualDevice) : (BaseWebReader)ReadWeb(async, webAddress, parser, null, form, secWaitAnswer, executeIfNoAnswer);
     }
 
     private static VirtualWebReader VirtualReadWeb(bool async, VirtualDevice client, string url, Action<string> parser, Action elapse, NameValueCollection form = null, int secTimeout = 0, Action executeAtTimeout = null)
@@ -427,7 +427,7 @@ namespace NetworkManager
         Result = response?.Text;
         ResponseHeaders = response?.Headers;
         var mb = response?.Text?.Length / 1048576f ?? 0;
-        // It is empirical but excellent for simulating the network speed as set by the Virtual Device
+        // It is empirical but excellent for simulating the networkConnection speed as set by the Virtual Device
         var pauseMs = (int)(mb / client.NetSpeed * 1000 * _currentWebRequest);
         var msFromTime = (int)(DateTime.Now.ToUniversalTime() - time).TotalMilliseconds;
         pauseMs -= msFromTime;
