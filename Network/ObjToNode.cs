@@ -71,17 +71,16 @@ namespace NetworkManager
 		/// <returns>Returns the signature if the timestamp assigned by the node is correct, otherwise null</returns>
 		internal string CreateTheSignatureForTheTimestamp(Node myNode, DateTime now)
 		{
-			var thisMoment = now;
-			var dt = new DateTime(Timestamp);
+			var remoteNow = new DateTime(Timestamp);
 			const double margin = 0.5; // ***Calculates a margin because the clocks on the nodes may not be perfectly synchronized
-			if (thisMoment < dt.AddSeconds(-margin))
+			if (now < remoteNow.AddSeconds(-margin))
 			{
 				Utility.Log("signature", "signature rejected for incongruous timestamp");
 				System.Diagnostics.Debugger.Break();
 				return null;
 			}
 			const int maximumTimeToTransmitTheDataOnTheNode = 2; // ***In seconds
-			return thisMoment <= dt.AddSeconds(maximumTimeToTransmitTheDataOnTheNode + margin) ? GetTimestampSignature(myNode) : null;
+			return now <= remoteNow.AddSeconds(maximumTimeToTransmitTheDataOnTheNode + margin) ? GetTimestampSignature(myNode) : null;
 		}
 		private string GetTimestampSignature(Node node)
 		{

@@ -276,10 +276,7 @@ namespace NetworkManager
 						var timestamps = (ObjToNode.TimestampVector)objTimestampVector;
 						foreach (var element in elements)
 							if (element.Level == 1 && timestamps.TryGetValue(element.ShortHash(), out var signedTimestamp))
-							{
 								element.TimestampSignature += signedTimestamp;
-								var l = Convert.FromBase64String(signedTimestamp).Length;
-							}
 					}
 				}
 				else
@@ -298,7 +295,6 @@ namespace NetworkManager
 					// The node at zero level (the entry point of the request), when it has kept the signature of the timestamp from all the connected nodes, communicates to each connected node all the collected signatures.
 					// This is a decentralized collective timestamp.
 					SendTimestampSignatureToNode(timestampVector, node);
-
 			}).Start();
 		}
 
@@ -316,8 +312,7 @@ namespace NetworkManager
 			{
 				//Verify if the node is disconnected
 				if (!_networkConnection.NodeList.Contains(toNode)) return;
-				StandardAnswer answer;
-				answer = Answer(SendRequest(toNode, StandardMessages.SendTimestampSignatureToNode, timestampVector));
+				var answer = Answer(SendRequest(toNode, StandardMessages.SendTimestampSignatureToNode, timestampVector));
 			}).Start();
 		}
 

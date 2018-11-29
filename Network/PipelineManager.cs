@@ -1,6 +1,8 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
+using System.Linq.Expressions;
 using System.Timers;
 using static NetworkManager.NetworkConnection;
 
@@ -149,7 +151,6 @@ namespace NetworkManager
 		/// <param name="fromNode">From which node comes the element</param>
 		internal ObjToNode.TimestampVector AddLocalFromNode(IEnumerable<ObjToNode> elements, Node fromNode)
 		{
-
 			ObjToNode.TimestampVector result = null;
 			lock (Pipeline)
 			{
@@ -174,6 +175,9 @@ namespace NetworkManager
 								if (objToNode.CheckNodeThatStartedDistributingTheObject(fromNode))
 								{
 									var signature = objToNode.CreateTheSignatureForTheTimestamp(_networkConnection.MyNode, _networkConnection.Now);
+#if DEBUG
+					if (signature==null) Debugger.Break();				
+#endif
 									_standByList.Add(objToNode);
 									if (result == null) result = new ObjToNode.TimestampVector();
 									result.Add(objToNode.ShortHash(), signature);
@@ -238,6 +242,10 @@ namespace NetworkManager
 							if (objToNode.CheckSignedTimestamp(_networkConnection, fromIp) == ObjToNode.CheckSignedTimestampResult.Ok)
 							{
 								Pipeline.Add(new ElementPipeline(objToNode.GetElement));
+							}
+							else
+							{
+								Debugger.Break();
 							}
 						}
 					foreach (var item in remove)

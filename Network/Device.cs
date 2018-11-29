@@ -1,5 +1,12 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Globalization;
+using System.IO;
+using System.Net;
+using System.Net.Cache;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices.ComTypes;
+using System.Text.RegularExpressions;
 using System.Web;
 using System.Xml.Serialization;
 using static NetworkManager.Protocol;
@@ -8,7 +15,7 @@ namespace NetworkManager
 {
 	public class Device
 	{
-		protected Device(VirtualDevice virtualDevice)
+		protected Device(VirtualDevice virtualDevice = null)
 		{
 			OnlineDetection = new OnlineDetectionClass(this);
 			if (virtualDevice != null)
@@ -58,7 +65,7 @@ namespace NetworkManager
 		/// In this case, auto detect will continue to monitor the network and this function will return "true" as soon as the connection returns.
 		/// </summary>
 		public bool IsOnline { get => _bd.IsOnline; internal set => _bd.IsOnline = value; }
-		internal DateTime Now => BaseDevice.Now();
+		internal DateTime Now => _bd.Now();
 		internal VirtualDevice VirtualDevice { get => _bd.VirtualDevice; private set => _bd.VirtualDevice = value; }
 		private static BaseDevice _realDevice;
 		internal class BaseDevice
@@ -72,17 +79,41 @@ namespace NetworkManager
 					return result;
 				}
 			}
-			public bool IsOnline { get; internal set; } = true;
-
-			//internal bool _isOnline = true;
-			//public bool IsOnline { get => _isOnline;
-			//  private set { _isOnline = value; }
-			//}
-			internal static DateTime Now()
+			private bool _isOnline = true;
+			public bool IsOnline
 			{
-				return DateTime.UtcNow;
+				get => _isOnline;
+				internal set
+				{
+					_isOnline = value;
+					if (_isOnline && !_timeIsAdjusted)
+						_timeIsAdjusted = AdjustDateTime();
+				}
+			}
+			private bool _timeIsAdjusted;
+			private bool AdjustDateTime()
+			{
+				if (VirtualDevice == null)
+					return Utility.GetNistTime(out _, out _offsetTime) || Utility.GetAverageDateTimeFromWeb(out _, out _offsetTime);
+				if (!VirtualDevice.IsOnline)
+					return false;
+				//_offsetTime = TimeSpan.FromMilliseconds(new Random().NextDouble() * 400 - 200); //simulate a error from -200 to +200
+				_offsetTime = TimeSpan.FromMilliseconds(new Random().NextDouble() * 400000 - 200000); //simulate a error from -200 to +200
+				return true;
+			}
+
+
+			private TimeSpan _offsetTime = new TimeSpan();
+			internal DateTime Now()
+			{
+				var now = DateTime.UtcNow;
+				if (VirtualDevice != null)
+					now += VirtualDevice.ErrorTime;
+				now += _offsetTime;
+				return now;
 			}
 			internal VirtualDevice VirtualDevice;
+
 			/// <summary>
 			/// This procedure receives an http request and processes the response based on the input received and the protocol
 			/// </summary>
@@ -300,7 +331,7 @@ namespace NetworkManager
 				{
 					var r1 = new System.Net.NetworkInformation.Ping().Send("www.google.com.mx").Status == System.Net.NetworkInformation.IPStatus.Success;
 					var r2 = new System.Net.NetworkInformation.Ping().Send("www.bing.com").Status == System.Net.NetworkInformation.IPStatus.Success;
-					return r1 && r2;
+					return r1 || r2;
 				}
 				catch (Exception ex)
 				{
