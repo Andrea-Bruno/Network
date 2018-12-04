@@ -276,7 +276,14 @@ namespace NetworkManager
 						var timestamps = (ObjToNode.TimestampVector)objTimestampVector;
 						foreach (var element in elements)
 							if (element.Level == 1 && timestamps.TryGetValue(element.ShortHash(), out var signedTimestamp))
-								element.TimestampSignature += signedTimestamp;
+							{
+								var check = element.AddTimestampSignature(signedTimestamp, toNode);
+								if (check != ObjToNode.CheckSignedTimestampResult.Ok)
+								{
+									Debugger.Break();
+									Utility.Log("signature", "Signature error from IP " + Converter.UintToIp(toNode.Ip) + " " + check.ToString());
+								}
+							}
 					}
 				}
 				else
@@ -287,10 +294,14 @@ namespace NetworkManager
 				responseMonitor.ResponseCounter += 1;
 				if (responseMonitor.ResponseCounter != responseMonitor.Level0Connections.Count) return;
 				// All nodes connected to the zero level have signed the timestamp, now the signature of the timestamp of all the nodes must be sent to every single node.
-				// This operation is used to create a decentralized timestamp.
+				// This operation is used to create a decentralized timestamp.				
 				var timestampVector = new ObjToNode.TimestampVector();
+				var timeLimit = _networkConnection.Now.AddSeconds(-(PipelineManager.SignatureTimeout - 0.5)).Ticks; // Node at level 0 have max (N-0.5) second to transmit the signedTimestamps
 				foreach (var element in elements)
-					timestampVector.Add(element.ShortHash(), element.TimestampSignature);
+					if (element.FlagSignatureError != ObjToNode.CheckSignedTimestampResult.Ok || element.Timestamp <= timeLimit) // Avoid sending timestamp signatures for operations that could be ignored given the time limit criteria of the UnlockElementsInStandBy function in PipelineManager
+						_networkConnection.PipelineManager.RemoveLocal(element.GetElement);
+					else
+						timestampVector.Add(element.ShortHash(), element.TimestampSignature);
 				foreach (var node in responseMonitor.Level0Connections)
 					// The node at zero level (the entry point of the request), when it has kept the signature of the timestamp from all the connected nodes, communicates to each connected node all the collected signatures.
 					// This is a decentralized collective timestamp.

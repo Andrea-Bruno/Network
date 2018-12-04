@@ -24,6 +24,18 @@ namespace NetworkManager
 		[DataMember]
 		public long Timestamp { get => GetElement.Timestamp; set => GetElement.Timestamp = value; }
 		public string TimestampSignature;
+		internal CheckSignedTimestampResult AddTimestampSignature(string TimestampSignature, Node node)
+		{
+			var signature = new SignatureOfTimestamp(Convert.FromBase64String(TimestampSignature), out var check);
+			if (check == CheckSignedTimestampResult.Ok)
+				check = CheckSignature(signature, node.Ip, true, node);
+			if (check == CheckSignedTimestampResult.Ok)
+				this.TimestampSignature += TimestampSignature;
+			else
+				FlagSignatureError = check;
+			return check;
+		}
+		internal CheckSignedTimestampResult FlagSignatureError;
 		/// <summary>
 		/// Class used exclusively to transmit the timestamp certificates to the node who sent the object to be signed
 		/// </summary>
@@ -56,7 +68,7 @@ namespace NetworkManager
 			return Timestamp.GetHashCode() ^ XmlObject.GetHashCode();
 		}
 
-		private byte[] Hash()
+		internal byte[] Hash()
 		{
 			var data = Converter.GetBytes(Timestamp).Concat(Converter.StringToByteArray(XmlObject)).ToArray();
 			var hashBytes = Utility.GetHash(data);
@@ -76,7 +88,7 @@ namespace NetworkManager
 			if (now < remoteNow.AddSeconds(-margin))
 			{
 				Utility.Log("signature", "signature rejected for incongruous timestamp");
-				System.Diagnostics.Debugger.Break();
+				// System.Diagnostics.Debugger.Break();
 				return null;
 			}
 			const int maximumTimeToTransmitTheDataOnTheNode = 2; // ***In seconds
@@ -95,7 +107,7 @@ namespace NetworkManager
 			Debug.WriteLine(timestamp);
 			Debug.WriteLine(XmlObject);
 		}
-		internal enum CheckSignedTimestampResult { Ok, NodeThatPutTheSignatureNotFound, InvalidSignature, NonCompliantNetworkConfiguration, SignaturesNotFromCorrectNode }
+		internal enum CheckSignedTimestampResult { Ok, NodeThatPutTheSignatureNotFound, InvalidSignature, SigatureError, NonCompliantNetworkConfiguration, SignaturesNotFromCorrectNode, WrongSignatureSize }
 
 		/// <summary>
 		/// Check if all the nodes responsible for distributing this data have put their signature on the timestamp
@@ -106,48 +118,89 @@ namespace NetworkManager
 		internal CheckSignedTimestampResult CheckSignedTimestamp(NetworkConnection networkConnection, uint fromIp)
 		{
 			var currentNodeList = networkConnection.NodeList.CurrentAndRecentNodes();
-			const int lenT = 132;
 			var signedTimestamps = Convert.FromBase64String(TimestampSignature);
-			var ts = new List<byte[]>();
-			Node firstNode = null;
 			var nodes = new List<Node>();
+			var hashBytes = Hash();
+			List<SignatureOfTimestamp> signatures;
+			try
+			{
+				signatures = ReadSignedTimespan(signedTimestamps);
+			}
+			catch
+			{
+				Utility.Log("signature", "signature error from IP " + Converter.UintToIp(fromIp));
+				Debugger.Break();
+				return CheckSignedTimestampResult.SigatureError;
+			}
+			foreach (var signatureOfTimestamp in signatures)
+			{
+				var check = CheckSignature(signatureOfTimestamp, fromIp, nodes.Count == 0, currentNodeList, out var node, hashBytes);
+				if (check != CheckSignedTimestampResult.Ok) return check;
+				nodes.Add(node);
+			}
+			var validateConnection = networkConnection.ValidateConnectionAtLevel0(nodes.First(), nodes.Skip(1).ToList());
+			if (validateConnection == false) Debugger.Break();
+			return validateConnection ? CheckSignedTimestampResult.Ok : CheckSignedTimestampResult.NonCompliantNetworkConfiguration;
+		}
+
+		internal CheckSignedTimestampResult CheckSignature(SignatureOfTimestamp signatureOfTimestamp, uint fromIp, bool checkFromIp, List<Node> currentNodeList, out Node node, byte[] hashBytes = null)
+		{
+			node = currentNodeList.Find((x) => x.Ip == signatureOfTimestamp.IpNode);
+			if (node == null)
+				return CheckSignedTimestampResult.NodeThatPutTheSignatureNotFound;
+			return CheckSignature(signatureOfTimestamp, fromIp, checkFromIp, node, hashBytes);
+		}
+
+		internal CheckSignedTimestampResult CheckSignature(SignatureOfTimestamp signatureOfTimestamp, uint fromIp, bool checkFromIp, Node node, byte[] hashBytes = null)
+		{
+			hashBytes = hashBytes ?? Hash();
+			if (checkFromIp && signatureOfTimestamp.IpNode != fromIp)
+				return CheckSignedTimestampResult.SignaturesNotFromCorrectNode;
+			if (!node.Rsa.VerifyHash(hashBytes, System.Security.Cryptography.CryptoConfig.MapNameToOID("SHA256"), signatureOfTimestamp.Signature))
+				return CheckSignedTimestampResult.InvalidSignature;
+			return CheckSignedTimestampResult.Ok;
+		}
+		internal bool CheckNodeThatStartedDistributingTheObject(Node fromNode)
+		{
+			try
+			{
+				var first = ReadSignedTimespan(Convert.FromBase64String(TimestampSignature)).First();
+				return fromNode.Ip == first.IpNode && fromNode.Rsa.VerifyHash(Hash(), System.Security.Cryptography.CryptoConfig.MapNameToOID("SHA256"), first.Signature);
+			}
+			catch (Exception e)
+			{
+				return false;
+			}
+		}
+		private const int lenT = 132;
+		private static List<SignatureOfTimestamp> ReadSignedTimespan(byte[] signedTimestamps)
+		{
+			var ts = new List<byte[]>();
+			var timestampSignatures = new List<SignatureOfTimestamp>();
 			do
 			{
 				var timestamp = signedTimestamps.Take(lenT).ToArray();
 				ts.Add(timestamp);
 				signedTimestamps = signedTimestamps.Skip(lenT).ToArray();
 			} while (signedTimestamps.Count() != 0);
-			var hashBytes = Hash();
 			foreach (var signedTs in ts)
+				timestampSignatures.Add(new SignatureOfTimestamp(signedTs, out _));
+			return timestampSignatures;
+		}
+		internal class SignatureOfTimestamp
+		{
+			public SignatureOfTimestamp(byte[] signature, out CheckSignedTimestampResult check)
 			{
-				ReadSignedTimespan(signedTs, out var ipNode, out var signature);
-				var node = currentNodeList.Find((x) => x.Ip == ipNode);
-				if (node == null)
-					return CheckSignedTimestampResult.NodeThatPutTheSignatureNotFound;
-				if (firstNode == null)
+				check = signature.Length == lenT ? CheckSignedTimestampResult.Ok : CheckSignedTimestampResult.WrongSignatureSize;
+				try
 				{
-					if (ipNode != fromIp)
-						return CheckSignedTimestampResult.SignaturesNotFromCorrectNode;
-					firstNode = node;
+					IpNode = Converter.BytesToUint(signature.Take(4).ToArray());
+					Signature = signature.Skip(4).ToArray();
 				}
-				else
-					nodes.Add(node);
-				if (!node.Rsa.VerifyHash(hashBytes, System.Security.Cryptography.CryptoConfig.MapNameToOID("SHA256"), signature))
-					return CheckSignedTimestampResult.InvalidSignature;
+				catch { }
 			}
-			var validateConnection = networkConnection.ValidateConnectionAtLevel0(firstNode, nodes);
-			if (validateConnection==false) Debugger.Break();
-			return validateConnection ? CheckSignedTimestampResult.Ok : CheckSignedTimestampResult.NonCompliantNetworkConfiguration;
-		}
-		internal bool CheckNodeThatStartedDistributingTheObject(Node fromNode)
-		{
-			ReadSignedTimespan(Convert.FromBase64String(TimestampSignature), out var ipNode, out var signature);
-			return fromNode.Ip == ipNode && fromNode.Rsa.VerifyHash(Hash(), System.Security.Cryptography.CryptoConfig.MapNameToOID("SHA256"), signature);
-		}
-		private static void ReadSignedTimespan(byte[] signedTimestamp, out uint ipNode, out byte[] signature)
-		{
-			ipNode = Converter.BytesToUint(signedTimestamp.Take(4).ToArray());
-			signature = signedTimestamp.Skip(4).ToArray();
+			public uint IpNode;
+			public byte[] Signature;
 		}
 	}
 }

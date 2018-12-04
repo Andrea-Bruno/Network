@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.ComponentModel.Design;
 using System.Diagnostics;
 using System.Linq;
 using System.Linq.Expressions;
@@ -137,6 +138,18 @@ namespace NetworkManager
 			_spooler.DataDelivery();
 			return true;
 		}
+		internal bool RemoveLocal(Element element)
+		{
+			lock (Pipeline)
+			{
+				var elementPipeline = Pipeline.Find(e => e.Element == element);
+				if (elementPipeline == null)
+					return false;
+				Pipeline.Remove(elementPipeline);
+				return true;
+			}
+		}
+
 
 		/// <summary>
 		/// In this waiting list all the objects awaiting the timestamp signature are inserted by all the nodes assigned to the first level distribution
@@ -176,7 +189,7 @@ namespace NetworkManager
 								{
 									var signature = objToNode.CreateTheSignatureForTheTimestamp(_networkConnection.MyNode, _networkConnection.Now);
 #if DEBUG
-					if (signature==null) Debugger.Break();				
+									if (signature == null) Debugger.Break();
 #endif
 									_standByList.Add(objToNode);
 									if (result == null) result = new ObjToNode.TimestampVector();
@@ -184,7 +197,7 @@ namespace NetworkManager
 								}
 								else
 								{
-									Utility.Log("security", "Check failure fromNode " + fromNode.Ip);
+									Utility.Log("security", "check failure fromNode " + fromNode.Ip);
 									System.Diagnostics.Debugger.Break();
 								}
 							}
@@ -220,14 +233,17 @@ namespace NetworkManager
 			}
 			return result;
 		}
-		/// <summary>
-		/// The node at level 1 received the signatures collected from the node at level 0. Check if everything is correct, remove the objects from stand by and start to distributing them 
-		/// </summary>
-		/// <param name="signedTimestamps">The decentralized signature</param>
-		/// <param name="fromIp">The IP of the node at level 0 that transmitted the signedTimestamps</param>
-		/// <returns></returns>
+		internal const double SignatureTimeout = 2.0; //*** Node at level 0 have max N second to transmit the signedTimestamps
+																									/// <summary>
+																									/// The node at level 1 received the signatures collected from the node at level 0. Check if everything is correct, remove the objects from stand by and start to distributing them 
+																									/// </summary>
+																									/// <param name="signedTimestamps">The decentralized signature</param>
+																									/// <param name="fromIp">The IP of the node at level 0 that transmitted the signedTimestamps</param>
+																									/// <returns></returns>
 		internal bool UnlockElementsInStandBy(ObjToNode.TimestampVector signedTimestamps, uint fromIp)
 		{
+			var timeLimit = _networkConnection.Now.AddSeconds(-SignatureTimeout).Ticks; // Node at level 0 have max N second to transmit the signedTimestamps
+			bool result = true;
 			lock (Pipeline)
 			{
 				var count = Pipeline.Count();
@@ -238,14 +254,22 @@ namespace NetworkManager
 						if (signedTimestamps.TryGetValue(objToNode.ShortHash(), out var signature))
 						{
 							remove.Add(objToNode);
-							objToNode.TimestampSignature = signature;
-							if (objToNode.CheckSignedTimestamp(_networkConnection, fromIp) == ObjToNode.CheckSignedTimestampResult.Ok)
+							if (objToNode.Timestamp > timeLimit) // Prevents the node at level 0 from holding the data for a long time, then distributing it late and attempting dishonest distributions
 							{
-								Pipeline.Add(new ElementPipeline(objToNode.GetElement));
+								objToNode.TimestampSignature = signature;
+								if (objToNode.CheckSignedTimestamp(_networkConnection, fromIp) == ObjToNode.CheckSignedTimestampResult.Ok)
+								{
+									Pipeline.Add(new ElementPipeline(objToNode.GetElement));
+								}
+								else
+								{
+									result = false;
+									Debugger.Break();
+								}
 							}
 							else
 							{
-								Debugger.Break();
+								result = false;
 							}
 						}
 					foreach (var item in remove)
@@ -255,7 +279,7 @@ namespace NetworkManager
 				Pipeline.Sort();
 				_spooler.DataDelivery();
 			}
-			return true;
+			return result;
 		}
 		private void UpdateStats(TimeSpan value, bool firstAdd = false)
 		{

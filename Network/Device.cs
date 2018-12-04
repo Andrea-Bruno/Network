@@ -97,8 +97,8 @@ namespace NetworkManager
 					return Utility.GetNistTime(out _, out _offsetTime) || Utility.GetAverageDateTimeFromWeb(out _, out _offsetTime);
 				if (!VirtualDevice.IsOnline)
 					return false;
-				//_offsetTime = TimeSpan.FromMilliseconds(new Random().NextDouble() * 400 - 200); //simulate a error from -200 to +200
-				_offsetTime = TimeSpan.FromMilliseconds(new Random().NextDouble() * 400000 - 200000); //simulate a error from -200 to +200
+				_offsetTime = TimeSpan.FromMilliseconds((new Random().NextDouble() * 400) - 200); //simulate a error from -200 to +200
+				//_offsetTime = TimeSpan.FromMilliseconds(new Random().NextDouble() * 400000 - 200000); //simulate a error from -200 to +200
 				return true;
 			}
 
