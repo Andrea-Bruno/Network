@@ -14,14 +14,14 @@ namespace NetworkManager
       _networkConnection = networkConnection;
       _pipelineManager = networkConnection.PipelineManager;
       _mappingNetwork = networkConnection.MappingNetwork;
-       SpoolerTimer = new Timer(_pauseBetweenTransmissionOnTheNode) { AutoReset = true};
+       SpoolerTimer = new Timer(PauseBetweenTransmissionOnTheNode) { AutoReset = true};
       SpoolerTimer.Elapsed += (sender, e) => DataDelivery();
     }
 	  internal readonly Timer SpoolerTimer ;
 		private readonly NetworkConnection _networkConnection;
     private readonly PipelineManager _pipelineManager;
     private readonly MappingNetwork _mappingNetwork;
-    private readonly int _pauseBetweenTransmissionOnTheNode = 2000;
+    internal static readonly int PauseBetweenTransmissionOnTheNode = 2000;
     /// <summary>
     /// Memorize when the last communication was made at a certain level
     /// </summary>
@@ -29,7 +29,7 @@ namespace NetworkManager
 
     internal void DataDelivery()
     {
-      List<Node> level0Connections = null;//The transmissions at this level will receive the signature of the timestamp from the node that receives them, these signatures once received all must be sent to every single node of this level
+      List<Node> level0Connections = null; //The transmissions at this level will receive the signature of the timestamp from the node that receives them, these signatures once received all must be sent to every single node of this level
       var dataToNode = new Dictionary<Node, List<ObjToNode>>();
       var toLevels = new List<int>();
       lock (_networkConnection.PipelineManager.Pipeline)
@@ -41,7 +41,7 @@ namespace NetworkManager
         lock (_lastTransmission)
           if (_lastTransmission.TryGetValue(toLevel, out var transmissionTime))
             msFromLastTransmissionAtThisLevel = (int)(DateTime.UtcNow - transmissionTime).TotalMilliseconds;
-        if (msFromLastTransmissionAtThisLevel <= _pauseBetweenTransmissionOnTheNode) continue;
+        if (msFromLastTransmissionAtThisLevel <= PauseBetweenTransmissionOnTheNode) continue;
         var connections = _networkConnection.MappingNetwork.GetConnections(toLevel); // ok, level is base 1
         if (toLevel == 1) //I'm at level 0 and broadcast at level 1
           level0Connections = connections;

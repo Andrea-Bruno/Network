@@ -13,7 +13,6 @@ namespace NetworkManager
 	public class Protocol
 	{
 		public delegate object GetObject(string xmlObject);
-
 		public enum StandardAnswer
 		{
 			Ok,
@@ -117,16 +116,18 @@ namespace NetworkManager
 			return nodeList;
 		}
 
-		internal StandardAnswer ImOffline(Node toNode, Node myNode)
+		internal bool ImOffline(Node toNode)
 		{
-			return Answer(SendRequest(toNode, StandardMessages.ImOffline, myNode));
+			const int marginMs = 500; // *** We add a small moment of latency since the communication is expelled from the shared pipeline and the node is actually offilne
+			var atTimestamp = _networkConnection.Now.AddMilliseconds(_networkConnection.NodeList.DeltaTimeMs + marginMs).Ticks;
+			var notification = new NodeOfflineNotification { Ip = _networkConnection.MyNode.Ip, atTimestamp = atTimestamp };
+			notification.AddSignature(_networkConnection.MyNode.Rsa);
+			return _networkConnection.PipelineManager.AddLocal(notification);
 		}
-
-		internal StandardAnswer ImOnline(Node toNode, Node myNode)
+		internal StandardAnswer ImOnline(Node toNode)
 		{
-			return Answer(SendRequest(toNode, StandardMessages.ImOnline, myNode));
+			return Answer(SendRequest(toNode, StandardMessages.ImOnline, _networkConnection.MyNode));
 		}
-
 		internal Stats GetStats(Node fromNode)
 		{
 			if (fromNode == null) return null;
@@ -364,25 +365,37 @@ namespace NetworkManager
 				var data = Converter.GetBytes(ipNodeToTesting).Concat(Converter.GetBytes(Speed)).Concat(Converter.GetBytes(Timestamp)).ToArray();
 				return Utility.GetHash(data);
 			}
-
 			public void SignTheResult(Node myNode, uint ipNodeToTesting, long currentTimestamp)
 			{
 				Timestamp = currentTimestamp;
 				Signature = Convert.ToBase64String(myNode.Rsa.SignHash(HashData(ipNodeToTesting), CryptoConfig.MapNameToOID("SHA256")));
 			}
-
 			public bool VerifySignature(Node nodeOfSignature, uint ipNewNode)
 			{
-				return NodeIp == nodeOfSignature.Ip && nodeOfSignature.Rsa.VerifyHash(HashData(ipNewNode),
-								 CryptoConfig.MapNameToOID("SHA256"), Convert.FromBase64String(Signature));
+				return NodeIp == nodeOfSignature.Ip && nodeOfSignature.Rsa.VerifyHash(HashData(ipNewNode), CryptoConfig.MapNameToOID("SHA256"), Convert.FromBase64String(Signature));
 			}
 		}
-
 		public class NodeOnlineNotification
 		{
 			public Node Node;
 			public List<SpeedTestResult> Signatures;
 		}
+		public class NodeOfflineNotification
+		{
+			public uint Ip;
+			public long atTimestamp;
+			public string Signature;
+			public byte[] GetHash() { return Utility.GetHash(Converter.GetBytes(Ip).Concat(Converter.GetBytes(atTimestamp)).ToArray()); }
+			public void AddSignature(RSACryptoServiceProvider Rsa)
+			{
+				Signature = Convert.ToBase64String(Rsa.SignHash(GetHash(), CryptoConfig.MapNameToOID("SHA256")));
+			}
+			public bool ValidateSignature(RSACryptoServiceProvider Rsa)
+			{
+				return Rsa.VerifyHash(GetHash(), CryptoConfig.MapNameToOID("SHA256"), Convert.FromBase64String(Signature));
+			}
+		}
+
 
 		internal class ResponseMonitor
 		{

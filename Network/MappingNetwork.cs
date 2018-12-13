@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Dynamic;
 
 namespace NetworkManager
 {
@@ -25,15 +26,40 @@ namespace NetworkManager
 			_c = count;
 			return _s;
 		}
+		private static Dictionary<int, int> _CacheLevels = new Dictionary<int, int>();
+		internal static int Levels(int nodes)
+		{
+			lock (_CacheLevels)
+			{
+				if (_CacheLevels.TryGetValue(nodes, out int level))
+					return level;
+				int distance;
+				do
+				{
+					var side = (int) Math.Ceiling(Math.Sqrt(nodes));
+					distance = side / (int) Math.Pow(3, level);
+					level++;
+				} while (distance > 1);
+
+				_CacheLevels.Add(nodes, level);
+				return level;
+			}
+		}
 		private int _myX = 0;
 		private int _myY = 0;
-		internal TimeSpan NetworkSyncTimeSpan = TimeSpan.FromSeconds(1);
-		internal void SetNetworkSyncTimeSpan(int latency)
+		internal static TimeSpan NetworkSyncTimeSpan(int Nodes)
 		{
-			if (latency != 0)
-				NetworkSyncTimeSpan = TimeSpan.FromMilliseconds(latency * 1.2);
+			const int MaxTransmissionTime = 1000; // *** maximum data transmission time via the Internet
+			const int GuaranteeMargin = 1;
+			var ms = (Levels(Nodes) + GuaranteeMargin) * Spooler.PauseBetweenTransmissionOnTheNode + MaxTransmissionTime;
+			return TimeSpan.FromMilliseconds(ms);
 		}
-		internal void GetXy(Node node, List<Node> nodeList, out int x, out int y)
+		//internal void SetNetworkSyncTimeSpan(int latency)
+		//{
+		//	if (latency != 0)
+		//		NetworkSyncTimeSpan = TimeSpan.FromMilliseconds(latency * 1.2);
+		//}
+		internal void GetXY(Node node, List<Node> nodeList, out int x, out int y)
 		{
 			if (nodeList.Count == 0)
 			{
@@ -69,7 +95,7 @@ namespace NetworkManager
 		internal void SetNodeNetwork()
 		{
 			//SquareSide = (int)Math.Ceiling(Math.Sqrt(NetworkConnection.NodeList.Count));
-			GetXy(_networkConnection.MyNode, _networkConnection.NodeList, out _myX, out _myY);
+			GetXY(_networkConnection.MyNode, _networkConnection.NodeList, out _myX, out _myY);
 			_cacheConnections = new Dictionary<int, List<Node>>();
 		}
 		private Dictionary<int, List<Node>> _cacheConnections = new Dictionary<int, List<Node>>();
@@ -99,7 +125,7 @@ namespace NetworkManager
 		internal List<Node> GetConnections(int level, Node node, List<Node> nodeList)
 		{
 #if DEBUG
-			if (level==0) Debugger.Break(); // level is base 1!
+			if (level == 0) Debugger.Break(); // level is base 1!
 #endif
 			var list = new List<Node>();
 			if (nodeList.Count == 0) return list;
@@ -108,7 +134,7 @@ namespace NetworkManager
 				distance = 1;
 			int xNode, yNode;
 			if (node != _networkConnection.MyNode || nodeList != _networkConnection.NodeList)
-				GetXy(node, nodeList, out xNode, out yNode);
+				GetXY(node, nodeList, out xNode, out yNode);
 			else
 			{
 				xNode = _myX;

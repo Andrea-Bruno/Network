@@ -167,7 +167,7 @@ namespace NetworkManager
 				var first = ReadSignedTimespan(Convert.FromBase64String(TimestampSignature)).First();
 				return fromNode.Ip == first.IpNode && fromNode.Rsa.VerifyHash(Hash(), System.Security.Cryptography.CryptoConfig.MapNameToOID("SHA256"), first.Signature);
 			}
-			catch (Exception e)
+			catch
 			{
 				return false;
 			}

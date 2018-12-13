@@ -1,9 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.ComponentModel.Design;
 using System.Diagnostics;
 using System.Linq;
-using System.Linq.Expressions;
 using System.Timers;
 using static NetworkManager.NetworkConnection;
 
@@ -22,7 +20,7 @@ namespace NetworkManager
 			_spooler = new Spooler(networkConnection);
 			var newStats = new Timer(43200000) { AutoReset = true, Enabled = true };
 			newStats.Elapsed += (sender, e) => NewStatsElapsed();
-			Pipeline = new PipelineBuffer(Scheduler, _spooler.SpoolerTimer);
+			Pipeline = new PipelineBuffer(_networkConnection,Scheduler, _spooler);
 		}
 
 		private readonly NetworkConnection _networkConnection;
@@ -46,13 +44,14 @@ namespace NetworkManager
 			//var Pipeline = PipelineManager.Pipeline;
 			lock (Pipeline)
 			{
+				var NetworkSyncTimeSpan = MappingNetwork.NetworkSyncTimeSpan(_networkConnection.NodeList.Count);
 				var toRemove = new List<ElementPipeline>();
 				var thisTime = _networkConnection.Now;
 				foreach (var item in Pipeline)
 				{
 					//For objects of level 0 the timestamp is added by the spooler at the time of forwarding in order to reduce the time difference between the timestamp and the reception of the object on the other node
 					if (item.Element.Timestamp == 0) continue;
-					if ((thisTime - new DateTime(item.Element.Timestamp)) > _networkConnection.MappingNetwork.NetworkSyncTimeSpan)
+					if ((thisTime - new DateTime(item.Element.Timestamp)) > NetworkSyncTimeSpan)
 					{
 						toRemove.Add(item);
 						var objectName = Utility.GetObjectName(item.Element.XmlObject);
@@ -61,48 +60,67 @@ namespace NetworkManager
 					else
 						break;//because the pipeline is sorted by Timespan
 				}
-				foreach (var item in toRemove)
-					Pipeline.Remove(item);
+				Pipeline.Remove(toRemove);
 			}
 		}
 		private void OnReceiveObjectFromPipeline(string objectName, string xmlObject, long timestamp)
 		{
 			if (objectName == "NodeOnlineNotification")
-				if (Converter.XmlToObject(xmlObject, typeof(Protocol.NodeOnlineNotification), out var obj))
-				{
-					var nodeOnlineNotification = (Protocol.NodeOnlineNotification)(obj);
-					if (nodeOnlineNotification.Node.CheckIp())
-					{
-						var invalid = false;
-						var connections = new List<Node>();
-						Node nodeAtLevel0 = null;
-						foreach (var item in nodeOnlineNotification.Signatures)
-						{
-							var nodeOfSignature = _networkConnection.NodeList.CurrentAndRecentNodes().Find(x => x.Ip == item.NodeIp);
-							if (nodeOfSignature == null)
-							{
-								invalid = true;
-								break;
-							}
-							if (nodeAtLevel0 == null)
-								nodeAtLevel0 = nodeOfSignature;
-							else
-								connections.Add(nodeOfSignature);
-							if (item.VerifySignature(nodeOfSignature, nodeOnlineNotification.Node.Ip)) continue;
-							invalid = true;
-							break;
-						}
-						if (!invalid)
-							if (_networkConnection.ValidateConnectionAtLevel0(nodeAtLevel0, connections))
-								_networkConnection.NodeList.Add(nodeOnlineNotification.Node, timestamp);
-					}
-				}
+				ReceiveNodeOnlineNotification(xmlObject, timestamp);
+			else if (objectName == "NodeOfflineNotification")
+				ReceiveNodeOfflineNotification(xmlObject);
+
 
 			if (_pipelineCompletedAction.TryGetValue(objectName, out var action))
 				action.Invoke(xmlObject, timestamp);
 			//foreach (SyncData Action in PipelineCompletedAction)
 			//  Action.Invoke(item.XmlObject, item.Timestamp);
 		}
+
+		private void ReceiveNodeOfflineNotification(string xmlObject)
+		{
+			if (Converter.XmlToObject(xmlObject, typeof(Protocol.NodeOfflineNotification), out var obj))
+			{
+				var nodeOfflineNotification = (Protocol.NodeOfflineNotification)(obj);
+				var node = _networkConnection.NodeList.ListWithComingSoon().Find(x => x.Ip == nodeOfflineNotification.Ip);
+				if (node != null && nodeOfflineNotification.ValidateSignature(node.Rsa))
+					_networkConnection.NodeList.Remove(node, new DateTime(nodeOfflineNotification.atTimestamp));
+			}
+		}
+
+		private void ReceiveNodeOnlineNotification(string xmlObject, long timestamp)
+		{
+			if (Converter.XmlToObject(xmlObject, typeof(Protocol.NodeOnlineNotification), out var obj))
+			{
+				var nodeOnlineNotification = (Protocol.NodeOnlineNotification)(obj);
+				if (nodeOnlineNotification.Node.CheckIp())
+				{
+					var invalid = false;
+					var connections = new List<Node>();
+					Node nodeAtLevel0 = null;
+					foreach (var item in nodeOnlineNotification.Signatures)
+					{
+						var nodeOfSignature = _networkConnection.NodeList.CurrentAndRecentNodes().Find(x => x.Ip == item.NodeIp);
+						if (nodeOfSignature == null)
+						{
+							invalid = true;
+							break;
+						}
+						if (nodeAtLevel0 == null)
+							nodeAtLevel0 = nodeOfSignature;
+						else
+							connections.Add(nodeOfSignature);
+						if (item.VerifySignature(nodeOfSignature, nodeOnlineNotification.Node.Ip)) continue;
+						invalid = true;
+						break;
+					}
+					if (!invalid)
+						if (_networkConnection.ValidateConnectionAtLevel0(nodeAtLevel0, connections))
+							_networkConnection.NodeList.Add(nodeOnlineNotification.Node, timestamp);
+				}
+			}
+		}
+
 		/// <summary>
 		/// Insert the object in the local pipeline to be synchronized
 		/// Object is a new element inserted by an external user
@@ -128,28 +146,19 @@ namespace NetworkManager
 			//var Element = new Element() { Timestamp = Timestamp, XmlObject = XmlObject };
 			//At level 0 the timestamp will be assigned before transmission to the node in order to reduce the difference with the timestamp on the node
 			var element = new Element() { XmlObject = xmlObject };
-			lock (Pipeline)
-			{
-				var elementPipeline = new ElementPipeline(element);
-				elementPipeline.Levels.Add(1);
-				Pipeline.Add(elementPipeline);
-				Pipeline.Sort();
-			}
-			_spooler.DataDelivery();
+			var elementPipeline = new ElementPipeline(element);
+			elementPipeline.Levels.Add(1);
+			Pipeline.Add(elementPipeline);
 			return true;
 		}
 		internal bool RemoveLocal(Element element)
 		{
-			lock (Pipeline)
-			{
-				var elementPipeline = Pipeline.Find(e => e.Element == element);
-				if (elementPipeline == null)
-					return false;
-				Pipeline.Remove(elementPipeline);
-				return true;
-			}
+			var elementPipeline = Pipeline.Find(e => e.Element == element);
+			if (elementPipeline == null)
+				return false;
+			Pipeline.Remove(elementPipeline);
+			return true;
 		}
-
 
 		/// <summary>
 		/// In this waiting list all the objects awaiting the timestamp signature are inserted by all the nodes assigned to the first level distribution
@@ -167,7 +176,8 @@ namespace NetworkManager
 			ObjToNode.TimestampVector result = null;
 			lock (Pipeline)
 			{
-				var count = Pipeline.Count;
+				var networkSyncTimeSpan = MappingNetwork.NetworkSyncTimeSpan(_networkConnection.NodeList.Count);
+				var addList = new List<ElementPipeline>();
 				var thisTime = _networkConnection.Now;
 				// Remove any objects in standby that have not received the timestamp signed by everyone
 				lock (_standByList) _standByList.FindAll(o => (thisTime - new DateTime(o.Timestamp)).TotalSeconds >= 5).ForEach(o => _standByList.Remove(o));
@@ -175,7 +185,7 @@ namespace NetworkManager
 				{
 					var timePassedFromInsertion = thisTime - new DateTime(objToNode.Timestamp);
 					UpdateStats(timePassedFromInsertion);
-					if ((timePassedFromInsertion) <= _networkConnection.MappingNetwork.NetworkSyncTimeSpan)
+					if (timePassedFromInsertion <= networkSyncTimeSpan)
 					{
 						if (objToNode.Level == 1)
 						{
@@ -210,7 +220,7 @@ namespace NetworkManager
 							{
 								UpdateStats(timePassedFromInsertion, true);
 								elementPipeline = new ElementPipeline(objToNode.GetElement);
-								Pipeline.Add(elementPipeline);
+								addList.Add(elementPipeline);
 							}
 							lock (elementPipeline.Levels)
 								if (elementPipeline.Levels.Contains(level))
@@ -227,27 +237,26 @@ namespace NetworkManager
 						_stats12H.ElementsArrivedOutOfTime++;
 					}
 				}
-				if (count == Pipeline.Count) return result;
-				Pipeline.Sort();
-				_spooler.DataDelivery();
+				Pipeline.Add(addList);
 			}
 			return result;
 		}
 		internal const double SignatureTimeout = 2.0; //*** Node at level 0 have max N second to transmit the signedTimestamps
-																									/// <summary>
-																									/// The node at level 1 received the signatures collected from the node at level 0. Check if everything is correct, remove the objects from stand by and start to distributing them 
-																									/// </summary>
-																									/// <param name="signedTimestamps">The decentralized signature</param>
-																									/// <param name="fromIp">The IP of the node at level 0 that transmitted the signedTimestamps</param>
-																									/// <returns></returns>
+
+		/// <summary>
+		/// The node at level 1 received the signatures collected from the node at level 0. Check if everything is correct, remove the objects from stand by and start to distributing them 
+		/// </summary>
+		/// <param name="signedTimestamps">The decentralized signature</param>
+		/// <param name="fromIp">The IP of the node at level 0 that transmitted the signedTimestamps</param>
+		/// <returns></returns>
 		internal bool UnlockElementsInStandBy(ObjToNode.TimestampVector signedTimestamps, uint fromIp)
 		{
 			var timeLimit = _networkConnection.Now.AddSeconds(-SignatureTimeout).Ticks; // Node at level 0 have max N second to transmit the signedTimestamps
 			bool result = true;
 			lock (Pipeline)
 			{
-				var count = Pipeline.Count();
 				var remove = new List<ObjToNode>();
+				var addList = new List<ElementPipeline>();
 				lock (_standByList)
 				{
 					foreach (var objToNode in _standByList)
@@ -257,9 +266,10 @@ namespace NetworkManager
 							if (objToNode.Timestamp > timeLimit) // Prevents the node at level 0 from holding the data for a long time, then distributing it late and attempting dishonest distributions
 							{
 								objToNode.TimestampSignature = signature;
-								if (objToNode.CheckSignedTimestamp(_networkConnection, fromIp) == ObjToNode.CheckSignedTimestampResult.Ok)
+								var check = objToNode.CheckSignedTimestamp(_networkConnection, fromIp);
+								if (check == ObjToNode.CheckSignedTimestampResult.Ok)
 								{
-									Pipeline.Add(new ElementPipeline(objToNode.GetElement));
+									addList.Add(new ElementPipeline(objToNode.GetElement));
 								}
 								else
 								{
@@ -275,9 +285,7 @@ namespace NetworkManager
 					foreach (var item in remove)
 						_standByList.Remove(item);
 				}
-				if (count == Pipeline.Count()) return true;
-				Pipeline.Sort();
-				_spooler.DataDelivery();
+				Pipeline.Add(addList);
 			}
 			return result;
 		}
@@ -343,37 +351,78 @@ namespace NetworkManager
 
 		internal class PipelineBuffer : List<ElementPipeline>
 		{
-			private readonly Timer _pipelineTimer; //This timer is responsible for getting the elements out of the pipeline
-			private readonly Timer _spoolTimer; //This timer is responsible for distributing the elements on the nodes
-			public PipelineBuffer(Action scheduler, Timer spoolerTimer)
+			// _spooler.SpoolerTimer : This timer is responsible for distributing the elements on the nodes
+			private NetworkConnection _networkConnection;
+			private Timer _pipelineTimer; //This timer is responsible for getting the elements out of the pipeline
+			private Spooler _spooler;
+			public PipelineBuffer(NetworkConnection networkConnection, Action scheduler, Spooler spooler)
 			{
-				_spoolTimer = spoolerTimer;
+				_networkConnection = networkConnection;
+				_spooler = spooler;
 				_pipelineTimer = new Timer(1000) { AutoReset = true };//***
 				_pipelineTimer.Elapsed += (sender, e) => scheduler();
 			}
 			public new void Add(ElementPipeline item)
 			{
-				base.Add(item);
+				lock (this)
+					base.Add(item);
+				Sort();
 				if (_pipelineTimer.Enabled == false)
 					_pipelineTimer.Start();
-				if (_spoolTimer.Enabled == false)
-					_spoolTimer.Start();
+				if (_spooler.SpoolerTimer.Enabled == false)
+					_spooler.SpoolerTimer.Start();
+				_networkConnection.PipelineElementsChanged(Count);
+				_spooler.DataDelivery();
+			}
+
+			public void Add(List<ElementPipeline> elements)
+			{
+				if (elements.Count != 0)
+				{
+					lock (this)
+						foreach (var element in elements)
+							base.Add(element);
+					Sort();
+					if (_pipelineTimer.Enabled == false)
+						_pipelineTimer.Start();
+					if (_spooler.SpoolerTimer.Enabled == false)
+						_spooler.SpoolerTimer.Start();
+					_networkConnection.PipelineElementsChanged(Count);
+					_spooler.DataDelivery();
+				}
 			}
 			public new void Remove(ElementPipeline item)
 			{
-				base.Remove(item);
+				lock (this)
+					base.Remove(item);
+				_networkConnection.PipelineElementsChanged(Count);
 				if (Count != 0) return;
 				_pipelineTimer.Stop();
-				_spoolTimer.Stop();
+				_spooler.SpoolerTimer.Stop();
+			}
+			public void Remove(List<ElementPipeline> elements)
+			{
+				if (elements.Count != 0)
+				{
+					lock (this)
+						foreach (var element in elements)
+							base.Remove(element);
+					_networkConnection.PipelineElementsChanged(Count);
+					if (Count != 0) return;
+					_pipelineTimer.Stop();
+					_spooler.SpoolerTimer.Stop();
+				}
 			}
 			public new void Sort()
 			{
-				var sorted = this.OrderBy(x => x.Element.XmlObject).ToList();//Used for the element whit same Timestamp
-				sorted = sorted.OrderBy(x => x.Element.Timestamp).ToList();
-				Clear();
-				AddRange(sorted);
+				lock (this)
+				{
+					var sorted = this.OrderBy(x => x.Element.XmlObject).ToList();//Used for the element whit same Timestamp
+					sorted = sorted.OrderBy(x => x.Element.Timestamp).ToList();
+					Clear();
+					AddRange(sorted);
+				}
 			}
-
 		}
 
 	}

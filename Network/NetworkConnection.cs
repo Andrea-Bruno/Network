@@ -99,7 +99,7 @@ namespace NetworkManager
 		{
 			NodeList.Update();
 			if (MyNode == null) return;
-			ThisNode.ConnectionStatus = Protocol.ImOnline(GetRandomNode(), MyNode);
+			ThisNode.ConnectionStatus = Protocol.ImOnline(GetRandomNode());
 			// if Answer = NoAnswer then I'm the first online node in the network  
 			if (ThisNode.ConnectionStatus == StandardAnswer.NoAnswer && _imEntryPoint)
 				ThisNode.ConnectionStatus = StandardAnswer.Ok; //I'm the first online node
@@ -109,11 +109,14 @@ namespace NetworkManager
 				var stats1 = Protocol.GetStats(GetRandomNode());
 				var stats2 = Protocol.GetStats(GetRandomNode());
 				networkLatency = Math.Max(stats1?.NetworkLatency ?? 0, stats2?.NetworkLatency ?? 0);//***
-				MappingNetwork.SetNetworkSyncTimeSpan(networkLatency);
+				//MappingNetwork.SetNetworkSyncTimeSpan(networkLatency);
 			}
 			MappingNetwork.SetNodeNetwork();
 		}
-
+		public void GoOffline()
+		{
+			Protocol.ImOffline(GetRandomNode());
+		}
 #if DEBUG
 		//==== REMOVE THE TEST IN THE FINAL VERSION
 		public void Test()
@@ -131,7 +134,7 @@ namespace NetworkManager
 			NodeList.AddRange(list);
 			var myNode = GetRandomNode();
 			MappingNetwork.SetNodeNetwork();
-			MappingNetwork.GetXy(myNode, NodeList, out var x2, out var y2);
+			MappingNetwork.GetXY(myNode, NodeList, out var x2, out var y2);
 			var thisNode = MappingNetwork.GetNodeAtPosition(NodeList, x2, y2);
 			var ok = MyNode == thisNode;
 			var connections = MappingNetwork.GetConnections(1);
@@ -220,5 +223,11 @@ namespace NetworkManager
 		/// <param name="action">Action to execute for every object</param>
 		/// <param name="forObjectName">Indicates what kind of objects will be treated by this action</param>
 		public bool AddSyncDataFromPipelineAction(SyncData action, string forObjectName) => PipelineManager.AddSyncDataAction(action, forObjectName);
+
+		internal void PipelineElementsChanged(int NElements)
+		{
+			OnPipelineElementsChanged?.Invoke(EventArgs.Empty, NElements);			
+		}
+		public event EventHandler<int> OnPipelineElementsChanged;
 	}
 }

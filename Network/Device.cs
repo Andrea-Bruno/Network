@@ -98,7 +98,7 @@ namespace NetworkManager
 				if (!VirtualDevice.IsOnline)
 					return false;
 				_offsetTime = TimeSpan.FromMilliseconds((new Random().NextDouble() * 400) - 200); //simulate a error from -200 to +200
-				//_offsetTime = TimeSpan.FromMilliseconds(new Random().NextDouble() * 400000 - 200000); //simulate a error from -200 to +200
+																																													//_offsetTime = TimeSpan.FromMilliseconds(new Random().NextDouble() * 400000 - 200000); //simulate a error from -200 to +200
 				return true;
 			}
 
@@ -230,28 +230,28 @@ namespace NetworkManager
 										returnObject = network.PipelineManager.AddLocal(xmlObject) ? StandardAnswer.Ok : StandardAnswer.Error;
 										break;
 									case StandardMessages.ImOffline:
+
 									case StandardMessages.ImOnline:
 										{
 											if (Converter.XmlToObject(xmlObject, typeof(Node), out var objNode))
 											{
 												var node = (Node)objNode;
-												if (rq == StandardMessages.ImOnline)
-													if (node.CheckIp() && node.Ip != Converter.IpToUint(fromIp))
-														returnObject = StandardAnswer.IpError;
-													else if (network.NodeList.Find(x => x.Ip == node.Ip) != null)
-														returnObject = StandardAnswer.DuplicateIp;
-													else if (network.Protocol.DecentralizedSpeedTest(node, out var speedTestResults))
-													{
-														//If the decentralized speed test is passed, then it propagates the notification on all the nodes that there is a new online node.
-														network.Protocol.NotificationNewNodeIsOnline(node, speedTestResults);
-														returnObject = StandardAnswer.Ok;
-													}
-													else
-														returnObject = StandardAnswer.TooSlow;
+												//if (rq == StandardMessages.ImOnline)
+												if (node.CheckIp() && node.Ip != Converter.IpToUint(fromIp))
+													returnObject = StandardAnswer.IpError;
+												else if (network.NodeList.Find(x => x.Ip == node.Ip) != null)
+													returnObject = StandardAnswer.DuplicateIp;
+												else if (network.Protocol.DecentralizedSpeedTest(node, out var speedTestResults))
+												{
+													//If the decentralized speed test is passed, then it propagates the notification on all the nodes that there is a new online node.
+													network.Protocol.NotificationNewNodeIsOnline(node, speedTestResults);
+													returnObject = StandardAnswer.Ok;
+												}
+												else
+													returnObject = StandardAnswer.TooSlow;
 											}
 											else
 												returnObject = StandardAnswer.Error;
-
 											break;
 										}
 									case StandardMessages.RequestTestSpeed when Converter.XmlToObject(xmlObject, typeof(Node), out var objNode):
@@ -317,7 +317,7 @@ namespace NetworkManager
 		internal class OnlineDetectionClass
 		{
 			public OnlineDetectionClass(Device device)
-			{
+			{			
 				_checkInternetConnection = new System.Timers.Timer(30000) { AutoReset = true, Enabled = false, };
 				_checkInternetConnection.Elapsed += (sender, e) => ElapsedCheckInternetConnection();
 				_device = device;
