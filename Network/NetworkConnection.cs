@@ -7,8 +7,7 @@ namespace NetworkManager
 {
 	public class NetworkConnection : Device
 	{
-		public delegate bool Execute(Node node);
-
+		public delegate bool Execute(Node node)
 		public delegate void SyncData(string xmlObject, long timestamp);
 
 		/// <summary>
@@ -109,7 +108,7 @@ namespace NetworkManager
 				var stats1 = Protocol.GetStats(GetRandomNode());
 				var stats2 = Protocol.GetStats(GetRandomNode());
 				networkLatency = Math.Max(stats1?.NetworkLatency ?? 0, stats2?.NetworkLatency ?? 0);//***
-				//MappingNetwork.SetNetworkSyncTimeSpan(networkLatency);
+																																														//MappingNetwork.SetNetworkSyncTimeSpan(networkLatency);
 			}
 			MappingNetwork.SetNodeNetwork();
 		}
@@ -143,30 +142,30 @@ namespace NetworkManager
 
 		internal bool ValidateConnectionAtLevel0(Node nodeAtLevel0, List<Node> connections)
 		{
+		  var ComingSoonAndRecentNodes = NodeList.ComingSoonAndRecentNodes();
 			lock (NodeList)
-				lock (NodeList.RecentOfflineNodes)
-				{
-					List<Node> possibleConnections;
-					for (var n = 0; n <= NodeList.RecentOfflineNodes.Count; n++)
-						if (n == 0)
+			{
+				List<Node> possibleConnections;
+				for (var n = 0; n <= ComingSoonAndRecentNodes.Count; n++)
+					if (n == 0)
+					{
+						possibleConnections = MappingNetwork.GetConnections(1, nodeAtLevel0, NodeList);
+						if (possibleConnections.Count == connections.Count && connections.TrueForAll(x => possibleConnections.Contains(x)))
+							return true;
+					}
+					else
+					{
+						var groupsNodesToAdd = Utility.GetPermutations(ComingSoonAndRecentNodes, n);
+						foreach (var nodesToAdd in groupsNodesToAdd)
 						{
-							possibleConnections = MappingNetwork.GetConnections(1, nodeAtLevel0, NodeList);
+							var list = NodeList.Concat(nodesToAdd).ToList();
+							list = list.OrderBy(x => x.Ip).ToList();
+							possibleConnections = MappingNetwork.GetConnections(1, nodeAtLevel0, list);
 							if (possibleConnections.Count == connections.Count && connections.TrueForAll(x => possibleConnections.Contains(x)))
 								return true;
 						}
-						else
-						{
-							var groupsNodesToAdd = (List<List<Node>>)Utility.GetPermutations(NodeList.RecentOfflineNodes, n);
-							foreach (var nodesToAdd in groupsNodesToAdd)
-							{
-								var list = NodeList.Concat(nodesToAdd).ToList();
-								list = list.OrderBy(x => x.Ip).ToList();
-								possibleConnections = MappingNetwork.GetConnections(1, nodeAtLevel0, list);
-								if (possibleConnections.Count == connections.Count && connections.TrueForAll(x => possibleConnections.Contains(x)))
-									return true;
-							}
-						}
-				}
+					}
+			}
 			return false;
 		}
 
@@ -226,7 +225,7 @@ namespace NetworkManager
 
 		internal void PipelineElementsChanged(int NElements)
 		{
-			OnPipelineElementsChanged?.Invoke(EventArgs.Empty, NElements);			
+			OnPipelineElementsChanged?.Invoke(EventArgs.Empty, NElements);
 		}
 		public event EventHandler<int> OnPipelineElementsChanged;
 	}

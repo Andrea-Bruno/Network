@@ -45,7 +45,7 @@ namespace NetworkManager
 			else
 			{
 				//The list of nodes is updated when this node is also online, so the operation is postponed.
-				var timer = new Timer(DeltaTimeMs) { AutoReset = false };
+				var timer = new Timer(DoubleDeltaTimeMs) { AutoReset = false };
 				timer.Elapsed += (sender, e) => _update();
 				timer.Start();
 			}
@@ -94,8 +94,8 @@ namespace NetworkManager
 		{
 			lock (this)
 			{
-				lock (_comingSoon)
-					_comingSoon.Remove(_comingSoon.Find(x => x.Ip == nodeIp));
+				lock (ComingSoonNodes)
+					ComingSoonNodes.Remove(ComingSoonNodes.Find(x => x.Ip == nodeIp));
 				var node = Find(x => x.Ip == nodeIp);
 				if (node != null)
 				{
@@ -127,7 +127,9 @@ namespace NetworkManager
 		/// <summary>
 		/// This is the theoretical time limit that a data item takes to cover the shared pipeline
 		/// </summary>
-		internal int DeltaTimeMs => (int)MappingNetwork.NetworkSyncTimeSpan(this.Count).TotalMilliseconds;
+		internal int DoubleDeltaTimeMs => (int)MappingNetwork.NetworkSyncTimeSpan(this.Count).TotalMilliseconds * 2 + marginMs; //Doubling the time you are sure that with the update you can also read any nodes that are about to become online
+		internal int DeltaTimeMs => (int)MappingNetwork.NetworkSyncTimeSpan(this.Count).TotalMilliseconds + marginMs;
+		private const int marginMs = 1000; // *** We add a small moment of latency since the communication is expelled from the shared pipeline and the node is actually offilne
 
 		/// <summary>
 		///   Add a new node to the networkConnection. Using this function, the new node will be added to all nodes simultaneously.
@@ -138,21 +140,21 @@ namespace NetworkManager
 		{
 			//the node will be online starting from timestamp + DeltaTimeMs;
 			node.Timestamp = timestamp;
-			lock (_comingSoon) _comingSoon.Add(node);
+			lock (ComingSoonNodes) ComingSoonNodes.Add(node);
 			// Add this node after these time from timestamp
-			const int marginMs = 5000; // *** We add a small moment of latency since the communication is expelled from the shared pipeline and the node is actually offilne
-			var enabledFrom = timestamp + TimeSpan.FromMilliseconds(DeltaTimeMs + marginMs).Ticks;
+			var TimeNeededForTheUpdate = 7000; //This is the maximum time to perform the Update() operation
+			var enabledFrom = timestamp + TimeSpan.FromMilliseconds(DoubleDeltaTimeMs + TimeNeededForTheUpdate).Ticks;
 			var remainingTime = enabledFrom - _networkConnection.Now.Ticks;
 			var ms = (int)TimeSpan.FromTicks(remainingTime).TotalMilliseconds;
 			var timer = new Timer(ms >= 1 ? ms : 1) { AutoReset = false };
 			timer.Elapsed += (sender, e) =>
 			{
-				lock (_comingSoon)
+				lock (ComingSoonNodes)
 				{
-					if (!_comingSoon.Contains(node)) return;
+					if (!ComingSoonNodes.Contains(node)) return;
 					node.Timestamp = 0;
 					Add(node);
-					_comingSoon.Remove(node);
+					ComingSoonNodes.Remove(node);
 				}
 			};
 			timer.Start();
@@ -165,10 +167,18 @@ namespace NetworkManager
 		public List<Node> ListWithComingSoon()
 		{
 			lock (this)
-				lock (_comingSoon)
-					return this.Concat(_comingSoon).ToList();
+				lock (ComingSoonNodes)
+					return this.Concat(ComingSoonNodes).ToList();
 		}
-		private readonly List<Node> _comingSoon = new List<Node>();
+		public List<Node> ListWithRecentAndComingSoon()
+		{
+			lock (this)
+				lock (ComingSoonNodes)
+					lock (RecentOfflineNodes)
+						return this.Concat(RecentOfflineNodes).Concat(ComingSoonNodes).ToList();
+		}
+
+		private readonly List<Node> ComingSoonNodes = new List<Node>();
 		public readonly List<Node> RecentOfflineNodes = new List<Node>();
 		public List<Node> CurrentAndRecentNodes()
 		{
@@ -176,5 +186,12 @@ namespace NetworkManager
 				lock (RecentOfflineNodes)
 					return this.Concat(RecentOfflineNodes).ToList();
 		}
+		public List<Node> ComingSoonAndRecentNodes()
+		{
+			lock (ComingSoonNodes)
+				lock (RecentOfflineNodes)
+					return ComingSoonNodes.Concat(RecentOfflineNodes).ToList();
+		}
+
 	}
 }

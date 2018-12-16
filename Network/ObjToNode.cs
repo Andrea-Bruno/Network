@@ -23,6 +23,9 @@ namespace NetworkManager
 		public string XmlObject { get => GetElement.XmlObject; set => GetElement.XmlObject = value; }
 		[DataMember]
 		public long Timestamp { get => GetElement.Timestamp; set => GetElement.Timestamp = value; }
+		/// <summary>
+		/// Do not worry: it's a joint signature, its data includes the node that put the signature and the calculation is done on the hash of the timestamp + xml of the element
+		/// </summary>
 		public string TimestampSignature;
 		internal CheckSignedTimestampResult AddTimestampSignature(string TimestampSignature, Node node)
 		{
@@ -104,8 +107,13 @@ namespace NetworkManager
 		{
 			Timestamp = timestamp;
 			TimestampSignature = GetTimestampSignature(nodeLevel0);
+#if DEBUG
 			Debug.WriteLine(timestamp);
-			Debug.WriteLine(XmlObject);
+			Debug.WriteLine(System.Threading.Thread.CurrentThread.ManagedThreadId);
+			Debug.WriteLine(TimestampSignature);
+			if (TimestampSignature == null)
+				Debugger.Break();
+#endif
 		}
 		internal enum CheckSignedTimestampResult { Ok, NodeThatPutTheSignatureNotFound, InvalidSignature, SigatureError, NonCompliantNetworkConfiguration, SignaturesNotFromCorrectNode, WrongSignatureSize }
 

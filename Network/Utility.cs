@@ -1,7 +1,5 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Diagnostics;
-using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net;
@@ -33,9 +31,7 @@ namespace NetworkManager
 		public static IEnumerable<IEnumerable<T>> GetPermutations<T>(IEnumerable<T> list, int length)
 		{
 			var enumerable = list as T[] ?? list.ToArray();
-			return length == 1
-				? enumerable.Select(t => new[] { t })
-				: GetPermutations(enumerable, length - 1).SelectMany(t => enumerable.Where(e => !t.Contains(e)), (t1, t2) => t1.Concat(new[] { t2 }));
+			return length == 1 ? enumerable.Select(t => new[] { t }) : GetPermutations(enumerable, length - 1).SelectMany(t => enumerable.Where(e => !t.Contains(e)), (t1, t2) => t1.Concat(new[] { t2 }));
 		}
 
 		public static byte[] GetHash(byte[] data)
@@ -105,7 +101,7 @@ namespace NetworkManager
 		}
 
 		public static bool GetNistTime(out DateTime dateTime, out TimeSpan delta)
-		{			
+		{
 			try
 			{
 				var request = (HttpWebRequest)System.Net.WebRequest.Create("http://nist.time.gov/actualtime.cgi?lzbc=siqm9b");
@@ -115,7 +111,7 @@ namespace NetworkManager
 				request.ContentType = "application/x-www-form-urlencoded";
 				request.CachePolicy = new RequestCachePolicy(RequestCacheLevel.NoCacheNoStore); //No caching
 				var response = (HttpWebResponse)request.GetResponse();
-				if (response.StatusCode != HttpStatusCode.OK) {dateTime = DateTime.UtcNow; return false;}
+				if (response.StatusCode != HttpStatusCode.OK) { dateTime = DateTime.UtcNow; return false; }
 				var stream = new StreamReader(response.GetResponseStream() ?? throw new InvalidOperationException());
 				var html = stream.ReadToEnd();
 				var time = Regex.Match(html, @"(?<=\btime="")[^""]*").Value;

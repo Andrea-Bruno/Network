@@ -1,12 +1,5 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Globalization;
-using System.IO;
-using System.Net;
-using System.Net.Cache;
-using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices.ComTypes;
-using System.Text.RegularExpressions;
 using System.Web;
 using System.Xml.Serialization;
 using static NetworkManager.Protocol;
@@ -191,17 +184,12 @@ namespace NetworkManager
 									case StandardMessages.GetStats:
 										returnObject = new Stats { NetworkLatency = (int)network.PipelineManager.Stats24H.NetworkLatency.TotalMilliseconds };
 										break;
-									case StandardMessages.SendElementsToNode when Converter.XmlToObject(xmlObject, typeof(List<ObjToNode>), out var objElements):
+									case StandardMessages.SendElementsToNode:
+										if (Converter.XmlToObject(xmlObject, typeof(List<ObjToNode>), out var objElements))
 										{
 											var uintFromIp = Converter.IpToUint(fromIp);
 											Node fromNode = null;
-											for (var nTry = 0; nTry < 2; nTry++)
-											{
-												fromNode = network.NodeList.Find((x) => x.Ip == uintFromIp);
-												if (fromNode != null)
-													break;
-												System.Threading.Thread.Sleep(1000);
-											}
+											fromNode = network.NodeList.ListWithRecentAndComingSoon().Find((x) => x.Ip == uintFromIp);
 											if (fromNode == null)
 											{
 												returnObject = StandardAnswer.Unauthorized;
@@ -211,8 +199,8 @@ namespace NetworkManager
 												returnObject = network.PipelineManager.AddLocalFromNode((List<ObjToNode>)objElements, fromNode) ?? (object)StandardAnswer.Ok;
 											break;
 										}
-									case StandardMessages.SendElementsToNode:
-										returnObject = StandardAnswer.Error;
+										else
+											returnObject = StandardAnswer.Error;
 										break;
 									case StandardMessages.SendTimestampSignatureToNode when Converter.XmlToObject(xmlObject, typeof(ObjToNode.TimestampVector), out var timestampVector):
 										{
@@ -317,7 +305,7 @@ namespace NetworkManager
 		internal class OnlineDetectionClass
 		{
 			public OnlineDetectionClass(Device device)
-			{			
+			{
 				_checkInternetConnection = new System.Timers.Timer(30000) { AutoReset = true, Enabled = false, };
 				_checkInternetConnection.Elapsed += (sender, e) => ElapsedCheckInternetConnection();
 				_device = device;

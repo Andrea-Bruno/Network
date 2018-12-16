@@ -298,11 +298,15 @@ namespace NetworkManager
 				// This operation is used to create a decentralized timestamp.				
 				var timestampVector = new ObjToNode.TimestampVector();
 				var timeLimit = _networkConnection.Now.AddSeconds(-(PipelineManager.SignatureTimeout - 0.5)).Ticks; // Node at level 0 have max (N-0.5) second to transmit the signedTimestamps
-				foreach (var element in elements)
-					if (element.FlagSignatureError != ObjToNode.CheckSignedTimestampResult.Ok || element.Timestamp <= timeLimit) // Avoid sending timestamp signatures for operations that could be ignored given the time limit criteria of the UnlockElementsInStandBy function in PipelineManager
-						_networkConnection.PipelineManager.RemoveLocal(element.GetElement);
+				foreach (var objToNode in elements)
+					if (objToNode.FlagSignatureError != ObjToNode.CheckSignedTimestampResult.Ok || objToNode.Timestamp <= timeLimit) // Avoid sending timestamp signatures for operations that could be ignored given the time limit criteria of the UnlockElementsInStandBy function in PipelineManager
+						_networkConnection.PipelineManager.RemoveLocal(objToNode.GetElement);
 					else
-						timestampVector.Add(element.ShortHash(), element.TimestampSignature);
+					{
+						timestampVector.Add(objToNode.ShortHash(), objToNode.TimestampSignature);
+						var elementInPipeline = _networkConnection.PipelineManager.Pipeline.Find(x => x.Element == objToNode.GetElement);
+						if (elementInPipeline != null) elementInPipeline.TimestampSignature = elementInPipeline.TimestampSignature ?? objToNode.TimestampSignature;
+					}
 				foreach (var node in responseMonitor.Level0Connections)
 					// The node at zero level (the entry point of the request), when it has kept the signature of the timestamp from all the connected nodes, communicates to each connected node all the collected signatures.
 					// This is a decentralized collective timestamp.

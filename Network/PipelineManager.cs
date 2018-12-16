@@ -20,7 +20,7 @@ namespace NetworkManager
 			_spooler = new Spooler(networkConnection);
 			var newStats = new Timer(43200000) { AutoReset = true, Enabled = true };
 			newStats.Elapsed += (sender, e) => NewStatsElapsed();
-			Pipeline = new PipelineBuffer(_networkConnection,Scheduler, _spooler);
+			Pipeline = new PipelineBuffer(_networkConnection, Scheduler, _spooler);
 		}
 
 		private readonly NetworkConnection _networkConnection;
@@ -135,6 +135,7 @@ namespace NetworkManager
 		/// <summary>
 		/// Insert the object in the local pipeline to be synchronized
 		/// xmlObject is a new element inserted by an external user
+		/// In this case this will be the node at zero level
 		/// </summary>
 		/// <param name="xmlObject">Serialized object im format xml</param>
 		/// <returns></returns>
@@ -208,7 +209,7 @@ namespace NetworkManager
 								else
 								{
 									Utility.Log("security", "check failure fromNode " + fromNode.Ip);
-									System.Diagnostics.Debugger.Break();
+									Debugger.Break();
 								}
 							}
 						}
@@ -219,14 +220,16 @@ namespace NetworkManager
 							if (elementPipeline == null)
 							{
 								UpdateStats(timePassedFromInsertion, true);
-								elementPipeline = new ElementPipeline(objToNode.GetElement);
+								elementPipeline = new ElementPipeline(objToNode);
 								addList.Add(elementPipeline);
 							}
+							//else if (elementPipeline.TimestampSignature == null && objToNode.TimestampSignature != null)
+							//	elementPipeline.TimestampSignature = objToNode.TimestampSignature;
 							lock (elementPipeline.Levels)
 								if (elementPipeline.Levels.Contains(level))
 									elementPipeline.Levels.Add(level);
-							lock (elementPipeline.SendedNode)
-								elementPipeline.SendedNode.Add(fromNode);
+							lock (elementPipeline.ExcludeNodes)
+								elementPipeline.ExcludeNodes.Add(fromNode);
 							elementPipeline.Received++;
 						}
 					}
@@ -269,7 +272,7 @@ namespace NetworkManager
 								var check = objToNode.CheckSignedTimestamp(_networkConnection, fromIp);
 								if (check == ObjToNode.CheckSignedTimestampResult.Ok)
 								{
-									addList.Add(new ElementPipeline(objToNode.GetElement));
+									addList.Add(new ElementPipeline(objToNode));
 								}
 								else
 								{
@@ -326,13 +329,28 @@ namespace NetworkManager
 		internal readonly PipelineBuffer Pipeline;
 		internal class ElementPipeline
 		{
+			/// <summary>
+			/// Used only from the node at level 0.
+			/// In this case we still do not have the joint signature on the timestamp, and at this stage the timestamp still has to be assigned
+			/// </summary>
+			/// <param name="element"></param>
 			public ElementPipeline(Element element)
 			{
 				Element = element;
 			}
+			public ElementPipeline(ObjToNode objToNode)
+			{
+				Element = objToNode.GetElement;
+				TimestampSignature = objToNode.TimestampSignature;
+			}
 			public Element Element;
-			public List<Node> SendedNode = new List<Node>();
+			public List<int> SendedLevel = new List<int>();
+			public List<Node> ExcludeNodes = new List<Node>();
 			public int Received;
+			/// <summary>
+			/// Do not worry: it's a joint signature, its data includes the node that put the signature and the calculation is done on the hash of the timestamp + xml of the element
+			/// </summary>
+			public string TimestampSignature;
 			public List<int> Levels = new List<int>();
 		}
 		/// <summary>
