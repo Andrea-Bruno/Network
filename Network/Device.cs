@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Web;
 using System.Xml.Serialization;
 using static NetworkManager.Protocol;
@@ -179,7 +180,11 @@ namespace NetworkManager
 								switch (rq)
 								{
 									case StandardMessages.NetworkNodes:
-										returnObject = network.NodeList.ListWithComingSoon();
+										var nodeList = network.NodeList.ListWithRecentAndComingSoon();
+#if DEBUG
+										//										if (nodeList.Count <=2) Debugger.Break();
+#endif
+										returnObject = nodeList;
 										break;
 									case StandardMessages.GetStats:
 										returnObject = new Stats { NetworkLatency = (int)network.PipelineManager.Stats24H.NetworkLatency.TotalMilliseconds };
@@ -193,7 +198,7 @@ namespace NetworkManager
 											if (fromNode == null)
 											{
 												returnObject = StandardAnswer.Unauthorized;
-												System.Diagnostics.Debugger.Break();
+												Debugger.Break();
 											}
 											else
 												returnObject = network.PipelineManager.AddLocalFromNode((List<ObjToNode>)objElements, fromNode) ?? (object)StandardAnswer.Ok;
@@ -224,7 +229,6 @@ namespace NetworkManager
 											if (Converter.XmlToObject(xmlObject, typeof(Node), out var objNode))
 											{
 												var node = (Node)objNode;
-												//if (rq == StandardMessages.ImOnline)
 												if (node.CheckIp() && node.Ip != Converter.IpToUint(fromIp))
 													returnObject = StandardAnswer.IpError;
 												else if (network.NodeList.Find(x => x.Ip == node.Ip) != null)
@@ -235,6 +239,8 @@ namespace NetworkManager
 													network.Protocol.NotificationNewNodeIsOnline(node, speedTestResults);
 													returnObject = StandardAnswer.Ok;
 												}
+												else if (network.VirtualDevice != null) //If we use a virtual device then the result of the speed test is ignored because it means that we are doing debugging tests to refine the code
+													returnObject = StandardAnswer.Ok;
 												else
 													returnObject = StandardAnswer.TooSlow;
 											}

@@ -39,8 +39,9 @@ namespace NetworkManager
     /// The timestamp of when the node has notified its presence.
     /// Since the node is not put online immediately, this parameter is used to communicate to the other nodes, the nodes of the network in a list with nodes that will be imminent online but still waiting.
     /// </summary>
-    public long Timestamp;
-    public uint Ip;
+    public long? Timestamp;
+	  public long? Offline; //Remove time from List RecentOfflineNodes
+		public uint Ip;
     internal bool CheckIp()
     {
       return Ip == DetectIp();

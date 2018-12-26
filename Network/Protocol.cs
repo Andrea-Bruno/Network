@@ -45,7 +45,7 @@ namespace NetworkManager
 			}
 		}
 
-		private const int DefaultSpeedLimit = 1000;//***
+		private const int DefaultSpeedLimit = 1000; //***
 		private readonly int _speedLimit = DefaultSpeedLimit;
 		private readonly NetworkConnection _networkConnection;
 		internal readonly Dictionary<string, GetObject> OnReceivingObjectsActions = new Dictionary<string, GetObject>();
@@ -113,6 +113,9 @@ namespace NetworkManager
 				return new List<Node>();
 			Converter.XmlToObject(xmlResult, typeof(List<Node>), out var returnObj);
 			var nodeList = (List<Node>)returnObj;
+#if DEBUG
+			//			if (nodeList.Count <= 2) Debugger.Break();
+#endif
 			return nodeList;
 		}
 
@@ -188,7 +191,7 @@ namespace NetworkManager
 				}
 			speeds.Sort();
 			var best = speeds[0]; //if best = -1 = failure speed test
-			return best != -1 && best <= _speedLimit;
+			return best != -1 && (best <= _speedLimit || _networkConnection.VirtualDevice != null); //If we use a virtual device then the result of the speed test is ignored because it means that we are doing debugging tests to refine the code
 		}
 
 		internal SpeedTestResult SpeedTestSigned(Node nodeToTesting)
@@ -275,10 +278,10 @@ namespace NetworkManager
 					if (Converter.XmlToObject(xmlResult, typeof(ObjToNode.TimestampVector), out var objTimestampVector))
 					{
 						var timestamps = (ObjToNode.TimestampVector)objTimestampVector;
-						foreach (var element in elements)
-							if (element.Level == 1 && timestamps.TryGetValue(element.ShortHash(), out var signedTimestamp))
+						foreach (var objToNode in elements)
+							if (objToNode.Level == 1 && timestamps.TryGetValue(objToNode.ShortHash(), out var signedTimestamp))
 							{
-								var check = element.AddTimestampSignature(signedTimestamp, toNode);
+								var check = objToNode.AddTimestampSignature(signedTimestamp, toNode);
 								if (check != ObjToNode.CheckSignedTimestampResult.Ok)
 								{
 									Debugger.Break();
@@ -305,7 +308,7 @@ namespace NetworkManager
 					{
 						timestampVector.Add(objToNode.ShortHash(), objToNode.TimestampSignature);
 						var elementInPipeline = _networkConnection.PipelineManager.Pipeline.Find(x => x.Element == objToNode.GetElement);
-						if (elementInPipeline != null) elementInPipeline.TimestampSignature = elementInPipeline.TimestampSignature ?? objToNode.TimestampSignature;
+						if (elementInPipeline != null && elementInPipeline.TimestampSignature == null) elementInPipeline.TimestampSignature = objToNode.TimestampSignature;
 					}
 				foreach (var node in responseMonitor.Level0Connections)
 					// The node at zero level (the entry point of the request), when it has kept the signature of the timestamp from all the connected nodes, communicates to each connected node all the collected signatures.
@@ -335,6 +338,7 @@ namespace NetworkManager
 		internal enum StandardMessages
 		{
 			NetworkNodes,
+
 			ImOnline,
 			ImOffline,
 			RequestTestSpeed,

@@ -52,11 +52,11 @@ namespace NetworkManager
 							if (elementPipeline.Levels.Contains(toLevel) && !elementPipeline.SendedLevel.Contains(toLevel))
 							{
 								elementPipeline.SendedLevel.Add(toLevel);
-								var elementToNode = new ObjToNode(elementPipeline.Element) { Level = toLevel };
-								if (toLevel == 1 && elementToNode.Timestamp == 0) //I'm at level 0 and broadcast at level 1      
+								var objToNode = new ObjToNode(elementPipeline.Element, toLevel);
+								if (toLevel == 1 && objToNode.Timestamp == 0) //I'm at level 0 and broadcast at level 1      
 																																	// We assign the timestamp and sign it
 																																	// The nodes of level 1 that will receive this element, will verify the timestamp and if congruous they sign it and return the signature in response to the forwarding.
-									elementToNode.AddFirstTimestamp(_networkConnection.MyNode, _networkConnection.Now.Ticks);
+									objToNode.AddFirstTimestamp(_networkConnection.MyNode, _networkConnection.Now.Ticks);
 								lock (elementPipeline.ExcludeNodes)
 									foreach (var node in connections)
 										if (!elementPipeline.ExcludeNodes.Contains(node))
@@ -67,7 +67,7 @@ namespace NetworkManager
 												toSendToNode = new List<ObjToNode>();
 												listOfObjForNodes.Add(node, toSendToNode);
 											}
-											toSendToNode.Add(elementToNode);
+											toSendToNode.Add(objToNode);
 											lock (_lastTransmission)
 											{
 												_lastTransmission.Remove(toLevel);
@@ -83,10 +83,10 @@ namespace NetworkManager
 			{
 				if (level0Connections != null && level0Connections.Contains(toSend.Key))
 				{
+#if DEBUG
 					if (toSend.Value.Find(x => x.TimestampSignature == null) != null)
-					{
 						Debugger.Break();
-					}
+#endif
 					_networkConnection.Protocol.SendElementsToNode(toSend.Value, toSend.Key, responseMonitorForLevel0);
 				}
 				else

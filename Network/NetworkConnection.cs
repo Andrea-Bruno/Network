@@ -7,7 +7,7 @@ namespace NetworkManager
 {
 	public class NetworkConnection : Device
 	{
-		public delegate bool Execute(Node node)
+		public delegate bool Execute(Node node);
 		public delegate void SyncData(string xmlObject, long timestamp);
 
 		/// <summary>
@@ -142,23 +142,47 @@ namespace NetworkManager
 
 		internal bool ValidateConnectionAtLevel0(Node nodeAtLevel0, List<Node> connections)
 		{
-		  var ComingSoonAndRecentNodes = NodeList.ComingSoonAndRecentNodes();
+			bool response = false;
+			//var marginError = 500;
+			// bool imANewNode = (Now - NodeList.LastUpdate).TotalMilliseconds < (NodeList.TimeNeededForTheUpdateMs + marginError);
 			lock (NodeList)
 			{
+				for (int tryIndex = 1; tryIndex <= 2; tryIndex++)
+				{
+					response = _validateConnectionAtLevel0(nodeAtLevel0, connections);
+					if (NodeList.RecentlyUpdated && response == false)
+					{
+						// It is statistically unlikely but it could happen that a node is added to the network, in the short span of time that passes between updating the list of nodes and the online entry of this node.
+						NodeList.RecentlyUpdated = false;
+						NodeList._update();
+					}
+					else
+						break;
+				}
+			}
+			return response;
+		}
+
+		private bool _validateConnectionAtLevel0(Node nodeAtLevel0, List<Node> connections)
+		{
+			lock (NodeList)
+			{
+				var PossibleNodes = NodeList.ComingSoonAndNewAndRecentOfflineNodes();
+				var CertainNodes = NodeList.FindAll(x => !NodeList.NewNodes.Contains(x));
 				List<Node> possibleConnections;
-				for (var n = 0; n <= ComingSoonAndRecentNodes.Count; n++)
+				for (var n = 0; n <= PossibleNodes.Count; n++)
 					if (n == 0)
 					{
-						possibleConnections = MappingNetwork.GetConnections(1, nodeAtLevel0, NodeList);
+						possibleConnections = MappingNetwork.GetConnections(1, nodeAtLevel0, CertainNodes);
 						if (possibleConnections.Count == connections.Count && connections.TrueForAll(x => possibleConnections.Contains(x)))
 							return true;
 					}
 					else
 					{
-						var groupsNodesToAdd = Utility.GetPermutations(ComingSoonAndRecentNodes, n);
+						var groupsNodesToAdd = Utility.GetPermutations(PossibleNodes, n);
 						foreach (var nodesToAdd in groupsNodesToAdd)
 						{
-							var list = NodeList.Concat(nodesToAdd).ToList();
+							var list = CertainNodes.Concat(nodesToAdd).ToList();
 							list = list.OrderBy(x => x.Ip).ToList();
 							possibleConnections = MappingNetwork.GetConnections(1, nodeAtLevel0, list);
 							if (possibleConnections.Count == connections.Count && connections.TrueForAll(x => possibleConnections.Contains(x)))

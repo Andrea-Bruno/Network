@@ -10,6 +10,7 @@ namespace NetworkManager
 	public class Element
 	{
 		public long Timestamp;
+		public string TimestampSignature;
 		private string _xmlObject;
 		public string XmlObject { get => _xmlObject; set => _xmlObject = Utility.MinifyXml(value); }
 	}
@@ -17,16 +18,20 @@ namespace NetworkManager
 	{
 		public Element GetElement { get; }
 		public ObjToNode() { GetElement = new Element(); }
-		public ObjToNode(Element element) { GetElement = element; }
+		public ObjToNode(Element element, int toLevel)
+		{
+			GetElement = element;
+			Level = toLevel;
+		}
 		public int Level;
 		[DataMember]
 		public string XmlObject { get => GetElement.XmlObject; set => GetElement.XmlObject = value; }
 		[DataMember]
 		public long Timestamp { get => GetElement.Timestamp; set => GetElement.Timestamp = value; }
 		/// <summary>
-		/// Do not worry: it's a joint signature, its data includes the node that put the signature and the calculation is done on the hash of the timestamp + xml of the element
+		/// Do not worry!: it's a joint signature, its data includes the node that put the signature and the calculation is done on the hash of the timestamp + xml of the element
 		/// </summary>
-		public string TimestampSignature;
+		public string TimestampSignature { get => GetElement.TimestampSignature; set => GetElement.TimestampSignature = value; }
 		internal CheckSignedTimestampResult AddTimestampSignature(string TimestampSignature, Node node)
 		{
 			var signature = new SignatureOfTimestamp(Convert.FromBase64String(TimestampSignature), out var check);
@@ -35,7 +40,10 @@ namespace NetworkManager
 			if (check == CheckSignedTimestampResult.Ok)
 				this.TimestampSignature += TimestampSignature;
 			else
+			{
+				this.TimestampSignature += Convert.ToBase64String(Converter.GetBytes(node.Ip).Concat(SignatureOmitted).ToArray()); //Add empty signature (omitted signature)
 				FlagSignatureError = check;
+			}
 			return check;
 		}
 		internal CheckSignedTimestampResult FlagSignatureError;
@@ -115,7 +123,7 @@ namespace NetworkManager
 				Debugger.Break();
 #endif
 		}
-		internal enum CheckSignedTimestampResult { Ok, NodeThatPutTheSignatureNotFound, InvalidSignature, SigatureError, NonCompliantNetworkConfiguration, SignaturesNotFromCorrectNode, WrongSignatureSize }
+		internal enum CheckSignedTimestampResult { Ok, NodeThatPutTheSignatureNotFound, InvalidSignature, SigatureError, SignatureOmitted, NonCompliantNetworkConfiguration, SignaturesNotFromCorrectNode, WrongSignatureSize }
 
 		/// <summary>
 		/// Check if all the nodes responsible for distributing this data have put their signature on the timestamp
@@ -123,11 +131,11 @@ namespace NetworkManager
 		/// <param name="networkConnection"></param>
 		/// <param name="fromIp"></param>
 		/// <returns>Result of the operation</returns>
-		internal CheckSignedTimestampResult CheckSignedTimestamp(NetworkConnection networkConnection, uint fromIp)
+		internal CheckSignedTimestampResult CheckSignedTimestamp(NetworkConnection networkConnection, uint fromIp, bool fromLevel0 = false)
 		{
-			var currentNodeList = networkConnection.NodeList.CurrentAndRecentNodes();
+			if (TimestampSignature == null)
+				return CheckSignedTimestampResult.SignatureOmitted;
 			var signedTimestamps = Convert.FromBase64String(TimestampSignature);
-			var nodes = new List<Node>();
 			var hashBytes = Hash();
 			List<SignatureOfTimestamp> signatures;
 			try
@@ -140,12 +148,29 @@ namespace NetworkManager
 				Debugger.Break();
 				return CheckSignedTimestampResult.SigatureError;
 			}
-			foreach (var signatureOfTimestamp in signatures)
+
+			var nodes = new List<Node>();
+			var check = CheckSignedTimestampResult.Ok;
+			for (int tryIndex = 1; tryIndex <= 2; tryIndex++)
 			{
-				var check = CheckSignature(signatureOfTimestamp, fromIp, nodes.Count == 0, currentNodeList, out var node, hashBytes);
-				if (check != CheckSignedTimestampResult.Ok) return check;
-				nodes.Add(node);
+				var currentNodeList = networkConnection.NodeList.ListWithRecentAndComingSoon();
+				foreach (var signatureOfTimestamp in signatures)
+				{
+					check = CheckSignature(signatureOfTimestamp, fromIp, nodes.Count == 0 && fromLevel0, currentNodeList, out var node, hashBytes);
+					if (check != CheckSignedTimestampResult.Ok) break;
+					nodes.Add(node);
+				}
+				if (networkConnection.NodeList.RecentlyUpdated && check == CheckSignedTimestampResult.NodeThatPutTheSignatureNotFound)
+				{
+					// It is statistically unlikely but it could happen that a node is added to the network, in the short span of time that passes between updating the list of nodes and the online entry of this node.
+					nodes.Clear();
+					networkConnection.NodeList.RecentlyUpdated = false;
+					networkConnection.NodeList._update();
+				}
+				else
+					break;
 			}
+			if (check != CheckSignedTimestampResult.Ok) return check;
 			var validateConnection = networkConnection.ValidateConnectionAtLevel0(nodes.First(), nodes.Skip(1).ToList());
 			if (validateConnection == false) Debugger.Break();
 			return validateConnection ? CheckSignedTimestampResult.Ok : CheckSignedTimestampResult.NonCompliantNetworkConfiguration;
@@ -158,12 +183,14 @@ namespace NetworkManager
 				return CheckSignedTimestampResult.NodeThatPutTheSignatureNotFound;
 			return CheckSignature(signatureOfTimestamp, fromIp, checkFromIp, node, hashBytes);
 		}
-
+		private static readonly byte[] SignatureOmitted = new byte[lenT - 4];
 		internal CheckSignedTimestampResult CheckSignature(SignatureOfTimestamp signatureOfTimestamp, uint fromIp, bool checkFromIp, Node node, byte[] hashBytes = null)
 		{
 			hashBytes = hashBytes ?? Hash();
 			if (checkFromIp && signatureOfTimestamp.IpNode != fromIp)
 				return CheckSignedTimestampResult.SignaturesNotFromCorrectNode;
+			if (signatureOfTimestamp.Signature == SignatureOmitted)
+				return CheckSignedTimestampResult.SignatureOmitted;
 			if (!node.Rsa.VerifyHash(hashBytes, System.Security.Cryptography.CryptoConfig.MapNameToOID("SHA256"), signatureOfTimestamp.Signature))
 				return CheckSignedTimestampResult.InvalidSignature;
 			return CheckSignedTimestampResult.Ok;
@@ -199,6 +226,11 @@ namespace NetworkManager
 		{
 			public SignatureOfTimestamp(byte[] signature, out CheckSignedTimestampResult check)
 			{
+				if (signature == null || signature.Length == 0)
+				{
+					check = CheckSignedTimestampResult.SignatureOmitted;
+					return;
+				}
 				check = signature.Length == lenT ? CheckSignedTimestampResult.Ok : CheckSignedTimestampResult.WrongSignatureSize;
 				try
 				{

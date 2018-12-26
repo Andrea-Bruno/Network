@@ -1,0 +1,34 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio 15
+VisualStudioVersion = 15.0.27703.2047
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Network", "Network\Network.csproj", "{99E3D7F7-5286-4B88-89BF-F08501742FFD}"
+	ProjectSection(ProjectDependencies) = postProject
+		{7E984DC5-3ADD-4479-9CF7-B68B1CA56718} = {7E984DC5-3ADD-4479-9CF7-B68B1CA56718}
+	EndProjectSection
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "BlockchainManager", "..\BlockchainManager\BlockchainManager\BlockchainManager.csproj", "{7E984DC5-3ADD-4479-9CF7-B68B1CA56718}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{99E3D7F7-5286-4B88-89BF-F08501742FFD}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{99E3D7F7-5286-4B88-89BF-F08501742FFD}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{99E3D7F7-5286-4B88-89BF-F08501742FFD}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{99E3D7F7-5286-4B88-89BF-F08501742FFD}.Release|Any CPU.Build.0 = Release|Any CPU
+		{7E984DC5-3ADD-4479-9CF7-B68B1CA56718}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{7E984DC5-3ADD-4479-9CF7-B68B1CA56718}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{7E984DC5-3ADD-4479-9CF7-B68B1CA56718}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{7E984DC5-3ADD-4479-9CF7-B68B1CA56718}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {024BD93F-34E5-4A69-931E-10202A6611B0}
+	EndGlobalSection
+EndGlobal
