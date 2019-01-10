@@ -233,14 +233,12 @@ namespace NetworkManager
 													returnObject = StandardAnswer.IpError;
 												else if (network.NodeList.Find(x => x.Ip == node.Ip) != null)
 													returnObject = StandardAnswer.DuplicateIp;
-												else if (network.Protocol.DecentralizedSpeedTest(node, out var speedTestResults))
+												else if (network.Protocol.DecentralizedSpeedTest(node, out var speedTestResults) || network.VirtualDevice != null) //If we use a VirtualDevice then the result of the speed test is ignored because it means that we are doing debugging tests to refine the code
 												{
 													//If the decentralized speed test is passed, then it propagates the notification on all the nodes that there is a new online node.
 													network.Protocol.NotificationNewNodeIsOnline(node, speedTestResults);
 													returnObject = StandardAnswer.Ok;
-												}
-												else if (network.VirtualDevice != null) //If we use a virtual device then the result of the speed test is ignored because it means that we are doing debugging tests to refine the code
-													returnObject = StandardAnswer.Ok;
+												}										
 												else
 													returnObject = StandardAnswer.TooSlow;
 											}

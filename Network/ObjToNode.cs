@@ -10,6 +10,9 @@ namespace NetworkManager
 	public class Element
 	{
 		public long Timestamp;
+		/// <summary>
+		/// Do not worry: it's a joint signature, its data includes the node that put the signature and the calculation is done on the hash of the timestamp + xml of the element
+		/// </summary>
 		public string TimestampSignature;
 		private string _xmlObject;
 		public string XmlObject { get => _xmlObject; set => _xmlObject = Utility.MinifyXml(value); }
@@ -75,7 +78,6 @@ namespace NetworkManager
 		}
 		internal int ShortHash()
 		{
-			Debug.WriteLine(Timestamp.GetHashCode() ^ XmlObject.GetHashCode());
 			return Timestamp.GetHashCode() ^ XmlObject.GetHashCode();
 		}
 
@@ -115,6 +117,7 @@ namespace NetworkManager
 		{
 			Timestamp = timestamp;
 			TimestampSignature = GetTimestampSignature(nodeLevel0);
+			
 #if DEBUG
 			Debug.WriteLine(timestamp);
 			Debug.WriteLine(System.Threading.Thread.CurrentThread.ManagedThreadId);

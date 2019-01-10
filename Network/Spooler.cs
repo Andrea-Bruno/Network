@@ -46,37 +46,41 @@ namespace NetworkManager
 				var connections = _networkConnection.MappingNetwork.GetConnections(toLevel); // ok, level is base 1
 				if (toLevel == 1) //I'm at level 0 and broadcast at level 1
 					level0Connections = connections;
+
+				List<PipelineManager.ElementPipeline> elementsToBeSentToLevel;
 				lock (_networkConnection.PipelineManager.Pipeline)
-					foreach (var elementPipeline in _networkConnection.PipelineManager.Pipeline)
-						lock (elementPipeline.SendedLevel)
-							if (elementPipeline.Levels.Contains(toLevel) && !elementPipeline.SendedLevel.Contains(toLevel))
+				{
+					elementsToBeSentToLevel = _networkConnection.PipelineManager.Pipeline.FindAll(x => x.Levels.Contains(toLevel) && !x.SendedLevel.Contains(toLevel));
+				}
+				foreach (var elementPipeline in elementsToBeSentToLevel)
+				{
+					elementPipeline.SendedLevel.Add(toLevel);
+					var objToNode = new ObjToNode(elementPipeline.Element, toLevel);
+					if (toLevel == 1 && objToNode.Timestamp == 0) //I'm at level 0 and broadcast at level 1      
+					{
+						// We assign the timestamp and sign it
+						// The nodes of level 1 that will receive this element, will verify the timestamp and if congruous they sign it and return the signature in response to the forwarding.
+						objToNode.AddFirstTimestamp(_networkConnection.MyNode, _networkConnection.Now.Ticks);
+						_networkConnection.PipelineManager.Pipeline.Sort();
+					}
+					lock (elementPipeline.ExcludeNodes)
+						foreach (var node in connections)
+							if (!elementPipeline.ExcludeNodes.Contains(node))
 							{
-								elementPipeline.SendedLevel.Add(toLevel);
-								var objToNode = new ObjToNode(elementPipeline.Element, toLevel);
-								if (toLevel == 1 && objToNode.Timestamp == 0) //I'm at level 0 and broadcast at level 1      
-																																	// We assign the timestamp and sign it
-																																	// The nodes of level 1 that will receive this element, will verify the timestamp and if congruous they sign it and return the signature in response to the forwarding.
-									objToNode.AddFirstTimestamp(_networkConnection.MyNode, _networkConnection.Now.Ticks);
-								lock (elementPipeline.ExcludeNodes)
-									foreach (var node in connections)
-										if (!elementPipeline.ExcludeNodes.Contains(node))
-										{
-											elementPipeline.ExcludeNodes.Add(node);
-											if (!listOfObjForNodes.TryGetValue(node, out var toSendToNode))
-											{
-												toSendToNode = new List<ObjToNode>();
-												listOfObjForNodes.Add(node, toSendToNode);
-											}
-											toSendToNode.Add(objToNode);
-											lock (_lastTransmission)
-											{
-												_lastTransmission.Remove(toLevel);
-												_lastTransmission.Add(toLevel, DateTime.UtcNow);
-											}
-
-										}
+								elementPipeline.ExcludeNodes.Add(node);
+								if (!listOfObjForNodes.TryGetValue(node, out var toSendToNode))
+								{
+									toSendToNode = new List<ObjToNode>();
+									listOfObjForNodes.Add(node, toSendToNode);
+								}
+								toSendToNode.Add(objToNode);
+								lock (_lastTransmission)
+								{
+									_lastTransmission.Remove(toLevel);
+									_lastTransmission.Add(toLevel, DateTime.UtcNow);
+								}
 							}
-
+				}
 			}
 			var responseMonitorForLevel0 = new Protocol.ResponseMonitor { Level0Connections = level0Connections };
 			foreach (var toSend in listOfObjForNodes)

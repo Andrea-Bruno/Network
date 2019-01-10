@@ -154,6 +154,9 @@ namespace NetworkManager
 		}
 		internal bool RemoveLocal(Element element)
 		{
+#if DEBUG
+			Debugger.Break();
+#endif
 			var elementPipeline = Pipeline.Find(e => e.Element == element);
 			if (elementPipeline == null)
 				return false;
@@ -371,10 +374,6 @@ namespace NetworkManager
 			public List<Node> ExcludeNodes = new List<Node>();
 			public int Received;
 			/// <summary>
-			/// Do not worry: it's a joint signature, its data includes the node that put the signature and the calculation is done on the hash of the timestamp + xml of the element
-			/// </summary>
-			public string TimestampSignature;
-			/// <summary>
 			/// Target levels
 			/// </summary>
 			public List<int> Levels = new List<int>();
@@ -403,14 +402,14 @@ namespace NetworkManager
 			{
 				_networkConnection = networkConnection;
 				_spooler = spooler;
-				_pipelineTimer = new Timer(1000) { AutoReset = true };//***
+				_pipelineTimer = new Timer() { AutoReset = true };//***
 				_pipelineTimer.Elapsed += (sender, e) => scheduler();
 			}
 			public new void Add(ElementPipeline item)
 			{
 				lock (this)
 					base.Add(item);
-				Update();
+				Sort();
 			}
 
 			public void Add(List<ElementPipeline> elements)
@@ -420,19 +419,45 @@ namespace NetworkManager
 					lock (this)
 						foreach (var element in elements)
 							base.Add(element);
-					Update();
+					Sort();
 				}
 			}
 
-			private void Update()
+			public new void Sort()
 			{
-				Sort();
-				if (_pipelineTimer.Enabled == false)
-					_pipelineTimer.Start();
+				// This part of the code solves the problem of the "Byzantine fault tolerance"
+				lock (this)
+				{
+					Sort((x, y) =>
+					{
+						int compare = x.Element.Timestamp.CompareTo(y.Element.Timestamp);
+						if (compare != 0)
+							return compare;
+						return x.Element.XmlObject.CompareTo(y.Element.XmlObject);
+					});
+				}
+				_networkConnection.PipelineElementsChanged(Count);
 				if (_spooler.SpoolerTimer.Enabled == false)
 					_spooler.SpoolerTimer.Start();
-				_networkConnection.PipelineElementsChanged(Count);
 				_spooler.DataDelivery();
+				PlanNextSchedulerRun();
+			}
+
+			private void PlanNextSchedulerRun()
+			{
+				_pipelineTimer.Enabled = false;
+				ElementPipeline finded;
+				lock (this)
+					finded = Find(x => x.Element.Timestamp != 0);
+				if (finded != null)
+				{
+					var NetworkSyncTimeSpan = MappingNetwork.NetworkSyncTimeSpan(_networkConnection.NodeList.Count);
+					var exitFromPipelineTime = new DateTime(finded.Element.Timestamp).Add(NetworkSyncTimeSpan);
+					var remainingTime = (exitFromPipelineTime - _networkConnection.Now).TotalMilliseconds;
+					if (remainingTime < 0) remainingTime = 0;
+					_pipelineTimer.Interval = remainingTime + 1;
+					_pipelineTimer.Start();
+				}
 			}
 
 			public new void Remove(ElementPipeline item)
@@ -455,16 +480,6 @@ namespace NetworkManager
 					if (Count != 0) return;
 					_pipelineTimer.Stop();
 					_spooler.SpoolerTimer.Stop();
-				}
-			}
-			public new void Sort()
-			{
-				lock (this)
-				{
-					var sorted = this.OrderBy(x => x.Element.XmlObject).ToList();//Used for the element whit same Timestamp
-					sorted = sorted.OrderBy(x => x.Element.Timestamp).ToList();
-					Clear();
-					AddRange(sorted);
 				}
 			}
 		}

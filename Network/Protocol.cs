@@ -264,56 +264,49 @@ namespace NetworkManager
 				if (!_networkConnection.NodeList.Contains(toNode)) return;
 				xmlResult = SendRequest(toNode, StandardMessages.SendElementsToNode, elements);
 				var objectName = Utility.GetObjectName(xmlResult);
-				if (objectName == "TimestampVector")
-				{
-					var answer = Answer(xmlResult);
-					if (answer != StandardAnswer.Ok)
-					{
-						// Error occurred
-					}
-				}
-				if (responseMonitor == null) return;
-				if (objectName == "TimestampVector")
+				if (responseMonitor != null && objectName == "TimestampVector")
 				{
 					if (Converter.XmlToObject(xmlResult, typeof(ObjToNode.TimestampVector), out var objTimestampVector))
-					{
-						var timestamps = (ObjToNode.TimestampVector)objTimestampVector;
-						foreach (var objToNode in elements)
-							if (objToNode.Level == 1 && timestamps.TryGetValue(objToNode.ShortHash(), out var signedTimestamp))
-							{
-								var check = objToNode.AddTimestampSignature(signedTimestamp, toNode);
-								if (check != ObjToNode.CheckSignedTimestampResult.Ok)
+						responseMonitor.TimestampsVectors.Add((ObjToNode.TimestampVector)objTimestampVector);
+					if (responseMonitor.TimestampsVectors.Count != responseMonitor.Level0Connections.Count) return;
+					// All nodes connected to the zero level have signed the timestamp, now the signature of the timestamp of all the nodes must be sent to every single node.
+					// This operation is used to create a decentralized timestamp.				
+					foreach (var objToNode in elements)
+						if (objToNode.Level == 1)
+						{
+							var shortHash = objToNode.ShortHash();
+							foreach (var timestampsVector in responseMonitor.TimestampsVectors)
+								if (timestampsVector.TryGetValue(shortHash, out var signedTimestamp))
 								{
-									Debugger.Break();
-									Utility.Log("signature", "Signature error from IP " + Converter.UintToIp(toNode.Ip) + " " + check.ToString());
+									var check = objToNode.AddTimestampSignature(signedTimestamp, toNode);
+									if (check != ObjToNode.CheckSignedTimestampResult.Ok)
+									{
+										Debugger.Break();
+										Utility.Log("signature", "Signature error from IP " + Converter.UintToIp(toNode.Ip) + " " + check.ToString());
+									}
 								}
-							}
-					}
+								else
+									Debugger.Break();
+						}
+
+					var timestampVector = new ObjToNode.TimestampVector();
+					var timeLimit = _networkConnection.Now.AddSeconds(-(PipelineManager.SignatureTimeout - 0.5)).Ticks; // Node at level 0 have max (N-0.5) second to transmit the signedTimestamps
+					foreach (var objToNode in elements)
+						if (objToNode.FlagSignatureError != ObjToNode.CheckSignedTimestampResult.Ok || objToNode.Timestamp <= timeLimit) // Avoid sending timestamp signatures for operations that could be ignored given the time limit criteria of the UnlockElementsInStandBy function in PipelineManager
+							_networkConnection.PipelineManager.RemoveLocal(objToNode.GetElement);
+						else
+							timestampVector.Add(objToNode.ShortHash(), objToNode.TimestampSignature);
+					foreach (var node in responseMonitor.Level0Connections)
+						// The node at zero level (the entry point of the request), when it has kept the signature of the timestamp from all the connected nodes, communicates to each connected node all the collected signatures.
+						// This is a decentralized collective timestamp.
+						SendTimestampSignatureToNode(timestampVector, node);
 				}
 				else
 				{
-					var answer = Answer(xmlResult);
+					if (Answer(xmlResult) != StandardAnswer.Ok)
+						Debugger.Break();
 					// Add the response management here!!!
 				}
-				responseMonitor.ResponseCounter += 1;
-				if (responseMonitor.ResponseCounter != responseMonitor.Level0Connections.Count) return;
-				// All nodes connected to the zero level have signed the timestamp, now the signature of the timestamp of all the nodes must be sent to every single node.
-				// This operation is used to create a decentralized timestamp.				
-				var timestampVector = new ObjToNode.TimestampVector();
-				var timeLimit = _networkConnection.Now.AddSeconds(-(PipelineManager.SignatureTimeout - 0.5)).Ticks; // Node at level 0 have max (N-0.5) second to transmit the signedTimestamps
-				foreach (var objToNode in elements)
-					if (objToNode.FlagSignatureError != ObjToNode.CheckSignedTimestampResult.Ok || objToNode.Timestamp <= timeLimit) // Avoid sending timestamp signatures for operations that could be ignored given the time limit criteria of the UnlockElementsInStandBy function in PipelineManager
-						_networkConnection.PipelineManager.RemoveLocal(objToNode.GetElement);
-					else
-					{
-						timestampVector.Add(objToNode.ShortHash(), objToNode.TimestampSignature);
-						var elementInPipeline = _networkConnection.PipelineManager.Pipeline.Find(x => x.Element == objToNode.GetElement);
-						if (elementInPipeline != null && elementInPipeline.TimestampSignature == null) elementInPipeline.TimestampSignature = objToNode.TimestampSignature;
-					}
-				foreach (var node in responseMonitor.Level0Connections)
-					// The node at zero level (the entry point of the request), when it has kept the signature of the timestamp from all the connected nodes, communicates to each connected node all the collected signatures.
-					// This is a decentralized collective timestamp.
-					SendTimestampSignatureToNode(timestampVector, node);
 			}).Start();
 		}
 
@@ -408,7 +401,7 @@ namespace NetworkManager
 		internal class ResponseMonitor
 		{
 			public List<Node> Level0Connections;
-			public int ResponseCounter;
+			public List<ObjToNode.TimestampVector> TimestampsVectors;
 		}
 	}
 }

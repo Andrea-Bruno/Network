@@ -193,6 +193,7 @@ namespace NetworkManager
 
 		/// <summary>
 		/// This is the theoretical time limit that a data item takes to cover the shared pipeline
+		/// This part of the code solves the problem of the "Byzantine fault tolerance"
 		/// </summary>
 		internal int DoubleDeltaTimeMs => (int)MappingNetwork.NetworkSyncTimeSpan(this.Count).TotalMilliseconds * 2 + marginMs; //Doubling the time you are sure that with the update you can also read any nodes that are about to become online
 		internal int DeltaTimeMs => (int)MappingNetwork.NetworkSyncTimeSpan(this.Count).TotalMilliseconds + marginMs;
