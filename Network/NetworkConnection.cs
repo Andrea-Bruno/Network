@@ -53,8 +53,8 @@ namespace NetworkManager
 		/// </summary>
 		/// <param name="entryPoints">The list of permanent access points nodes, to access the network</param>
 		/// <param name="networkName">The name of the infrastructure. For tests we recommend using "testnet"</param>
-		/// <param name="myNode">Data related to your node. If you do not want to create the node, omit this parameter</param>
-		public NetworkConnection(IEnumerable<Node> entryPoints, string networkName = "testnet", NodeInitializer myNode = null) : base(myNode?.VirtualDevice)
+		/// <param name="myNodeInitializer">Data related to your node. If you do not want to create the node, omit this parameter</param>
+		public NetworkConnection(IEnumerable<Node> entryPoints, string networkName = "testnet", NodeInitializer myNodeInitializer = null) : base(myNodeInitializer?.VirtualDevice)
 		{
 			//if (VirtualDevice != null)
 			//{
@@ -67,16 +67,18 @@ namespace NetworkManager
 			MappingNetwork = new MappingNetwork(this);
 			var entry = new List<Node>(entryPoints as Node[] ?? entryPoints.ToArray());
 			NodeList = new NodeList(this);
-			if (myNode != null)
+			if (myNodeInitializer != null)
 			{
-				MyNode = new Node(myNode);
+				MyNode = new Node(myNodeInitializer);
 				MyNode.Ip = VirtualDevice?.Ip ?? MyNode.DetectIp();
 				var count = entry.Count;
 				entry.RemoveAll(x => x.Address == MyNode.Address || x.Ip == MyNode.Ip);
-				_imEntryPoint = count != entry.Count;
+				_imEntryPoint = count == 0 || (count != entry.Count);
 				ThisNode = new InfoNode(MyNode);
 				NodeList.Add(MyNode);
 			}
+			else
+				ThisNode = new InfoNode(MyNode);
 			entry.ForEach(x => x.DetectIp());
 			NodeList.AddRange(entry);
 			NetworkName = networkName;
@@ -100,15 +102,14 @@ namespace NetworkManager
 			if (MyNode == null) return;
 			ThisNode.ConnectionStatus = Protocol.ImOnline(GetRandomNode());
 			// if Answer = NoAnswer then I'm the first online node in the network  
-			if (ThisNode.ConnectionStatus == StandardAnswer.NoAnswer && _imEntryPoint)
+			if (ThisNode.ConnectionStatus == StandardAnswer.SingleNodeNetwork && _imEntryPoint)
 				ThisNode.ConnectionStatus = StandardAnswer.Ok; //I'm the first online node
 			else
 			{
-				var networkLatency = 0;
-				var stats1 = Protocol.GetStats(GetRandomNode());
-				var stats2 = Protocol.GetStats(GetRandomNode());
-				networkLatency = Math.Max(stats1?.NetworkLatency ?? 0, stats2?.NetworkLatency ?? 0);//***
-																																														//MappingNetwork.SetNetworkSyncTimeSpan(networkLatency);
+				Stats stats1 = Protocol.GetStats(GetRandomNode());
+				Stats stats2 = Protocol.GetStats(GetRandomNode());
+				var networkLatency = Math.Max(stats1?.NetworkLatency ?? 0, stats2?.NetworkLatency ?? 0);
+				//MappingNetwork.SetNetworkSyncTimeSpan(networkLatency);
 			}
 			MappingNetwork.SetNodeNetwork();
 		}
@@ -142,7 +143,7 @@ namespace NetworkManager
 
 		internal bool ValidateConnectionAtLevel0(Node nodeAtLevel0, List<Node> connections)
 		{
-			bool response = false;
+			var response = false;
 			//var marginError = 500;
 			// bool imANewNode = (Now - NodeList.LastUpdate).TotalMilliseconds < (NodeList.TimeNeededForTheUpdateMs + marginError);
 			lock (NodeList)

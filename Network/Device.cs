@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Net.NetworkInformation;
 using System.Web;
 using System.Xml.Serialization;
 using static NetworkManager.Protocol;
@@ -42,10 +43,7 @@ namespace NetworkManager
 			get
 			{
 				var list = new List<VirtualDevice>();
-				foreach (var baseDevice in BaseDevices)
-				{
-					list.Add(baseDevice.VirtualDevice);
-				}
+				BaseDevices.ForEach(x => { if (x.VirtualDevice != null) list.Add(x.VirtualDevice); });
 				return list;
 			}
 		}
@@ -238,7 +236,7 @@ namespace NetworkManager
 													//If the decentralized speed test is passed, then it propagates the notification on all the nodes that there is a new online node.
 													network.Protocol.NotificationNewNodeIsOnline(node, speedTestResults);
 													returnObject = StandardAnswer.Ok;
-												}										
+												}
 												else
 													returnObject = StandardAnswer.TooSlow;
 											}
@@ -276,7 +274,7 @@ namespace NetworkManager
               {
                 System.Diagnostics.Debug.Print(ex.Message);
                 System.Diagnostics.Debugger.Break();
-                ReturnObject = ex.Message;
+                returnObject = ex.Message;
               }
 #endif
 					if (returnObject == null || !string.IsNullOrEmpty(request)) continue;
@@ -327,6 +325,11 @@ namespace NetworkManager
 				}
 				catch (Exception ex)
 				{
+					try
+					{
+						return NetworkInterface.GetIsNetworkAvailable();
+					}
+					catch (Exception) { }
 					System.Diagnostics.Debug.Print(ex.Message);
 					System.Diagnostics.Debugger.Break();
 				}
@@ -366,5 +369,4 @@ namespace NetworkManager
 		/// <returns>True if the operation was successful</returns>
 		public readonly OnReceivesHttpRequestDelegate OnReceivesHttpRequest;
 	}
-
 }

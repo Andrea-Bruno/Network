@@ -82,7 +82,7 @@ namespace NetworkManager
 			timer.Start();
 		}
 
-		
+
 		/// <summary>
 		/// Update the list of online nodes by querying the networkConnection.
 		/// </summary>
